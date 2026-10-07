@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>lunibib — Katalog der Universitätsbibliothek Leipzig</title>
+    <meta
+      name="description"
+      content="Eine schnelle, aufgeräumte Oberfläche für den Katalog der Universitätsbibliothek Leipzig."
+    />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231f5d4c'/%3E%3Cpath d='M9 8h11a3 3 0 0 1 3 3v13H12a3 3 0 0 1-3-3z' fill='%23fff'/%3E%3Cpath d='M9 8v13a3 3 0 0 0 3 3' stroke='%231f5d4c' stroke-width='1.5' fill='none'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#results">Zu den Treffern springen</a>
+
+    <header class="masthead">
+      <div class="masthead-inner">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" width="26" height="26">
+              <rect width="32" height="32" rx="7" fill="currentColor" />
+              <path d="M9 8h11a3 3 0 0 1 3 3v13H12a3 3 0 0 1-3-3z" fill="#fff" />
+              <path d="M9 8v13a3 3 0 0 0 3 3" stroke="currentColor" stroke-width="1.5" fill="none" />
+            </svg>
+          </span>
+          <span class="brand-text">
+            <strong>lunibib</strong>
+            <small>Katalog UB Leipzig, schnell</small>
+          </span>
+        </div>
+
+        <form class="search" id="search-form" role="search" autocomplete="off">
+          <label class="field index-field">
+            <span class="sr-only">Suchfeld</span>
+            <select id="index" name="index">
+              <option value="serverChoice">Alle Felder</option>
+              <option value="title">Titel</option>
+              <option value="creator">Verfasser</option>
+              <option value="subject">Schlagwort</option>
+              <option value="publisher">Verlag</option>
+              <option value="identifier">ISBN</option>
+              <option value="issn">ISSN</option>
+              <option value="anywhere">Volltext</option>
+            </select>
+          </label>
+
+          <label class="field query-field">
+            <span class="sr-only">Suchbegriff</span>
+            <input
+              id="query"
+              name="q"
+              type="search"
+              placeholder="Titel, Verfasser, Schlagwort, ISBN …"
+              autofocus
+              spellcheck="false"
+            />
+          </label>
+
+          <button type="submit" class="primary">Suchen</button>
+          <button type="button" class="ghost" id="clear" title="Leeren (Esc)">Leeren</button>
+        </form>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="facets" id="facets" aria-label="Filter"></aside>
+
+      <section class="results-pane">
+        <div class="resultbar" id="resultbar" aria-live="polite"></div>
+        <div id="results" class="results">
+          <div class="welcome">
+            <h1>Finden statt warten.</h1>
+            <p>
+              lunibib fragt den Leipziger Katalog direkt über die offene SRU-Schnittstelle ab —
+              ohne die Theme-Skripte, die die offizielle Oberfläche langsam machen.
+            </p>
+            <ul class="welcome-tips">
+              <li><kbd>/</kbd> fokussiert das Suchfeld</li>
+              <li><kbd>Enter</kbd> sucht, <kbd>Esc</kbd> leert</li>
+              <li>Verfasser und Schlagwörter sind anklickbar</li>
+            </ul>
+          </div>
+        </div>
+        <div class="more-row">
+          <button type="button" id="more" class="ghost" hidden>Mehr laden</button>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>
+        Daten: <a href="https://sru.finc.info/de15?operation=explain&amp;version=1.1" target="_blank" rel="noopener">SRU
+        <code>sru.finc.info/de15</code></a> · Solr-Schema · max. 100 Treffer pro Abfrage
+      </span>
+      <span>
+        <a href="https://katalog.ub.uni-leipzig.de" target="_blank" rel="noopener">Original-Katalog</a>
+      </span>
+    </footer>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <dialog id="cite-dialog" class="cite-dialog">
+      <form method="dialog" class="cite-head">
+        <h2 id="cite-title">Zitieren</h2>
+        <button class="ghost" value="close" aria-label="Schließen">Schließen</button>
+      </form>
+      <div class="cite-body">
+        <section>
+          <div class="cite-label">
+            <span>Zitat</span>
+            <button type="button" class="ghost small" data-copy="citation">Kopieren</button>
+          </div>
+          <pre id="cite-citation"></pre>
+        </section>
+        <section>
+          <div class="cite-label">
+            <span>BibTeX</span>
+            <button type="button" class="ghost small" data-copy="bibtex">Kopieren</button>
+          </div>
+          <pre id="cite-bibtex"></pre>
+        </section>
+      </div>
+    </dialog>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
