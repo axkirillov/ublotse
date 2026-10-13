@@ -1,15 +1,17 @@
 {
-  "name": "lunibib",
+  "name": "ublotse",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "A faster, cleaner frontend for the Leipzig University Library catalogue (UBL), powered by the open finc SRU API.",
   "license": "MIT",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.5"
   },
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "android:build": "node android/build.mjs",
+    "android:test": "node android/tests/run.mjs"
   }
 }

@@ -1,5 +1,5 @@
 /**
- * lunibib — frontend.
+ * UBLotse — frontend.
  *
  * Plain ES modules, no framework. Talks only to the local /api/search proxy,
  * which in turn talks to the finc SRU endpoint. Results are fetched page by
@@ -20,7 +20,97 @@ const els = {
   citeTitle: document.getElementById('cite-title'),
   citeCitation: document.getElementById('cite-citation'),
   citeBibtex: document.getElementById('cite-bibtex'),
+  themeToggle: document.getElementById('theme-toggle'),
+  wishToggle: document.getElementById('wishlist-toggle'),
+  wishCount: document.getElementById('wishlist-count'),
 };
+
+// ------------------------------------------------------------------- theme
+
+const THEME_KEY = 'ublotse:theme';
+const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+/** The chosen mode, or whatever the operating system prefers. */
+function effectiveTheme() {
+  return document.documentElement.dataset.theme || (darkQuery.matches ? 'dark' : 'light');
+}
+
+function applyTheme(theme) {
+  if (theme) document.documentElement.dataset.theme = theme;
+  else delete document.documentElement.dataset.theme;
+
+  const current = effectiveTheme();
+  els.themeToggle.setAttribute('aria-pressed', String(current === 'dark'));
+  els.themeToggle.title =
+    current === 'dark' ? 'Zum hellen Farbmodus wechseln' : 'Zum dunklen Farbmodus wechseln';
+}
+
+// ------------------------------------------------------------------- icons
+
+// Line icons drawn from primitives, in the style of the catalogue's own set.
+const ICON_ATTRS =
+  'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
+
+const ICONS = {
+  book: '<path d="M6.5 4.5A1.5 1.5 0 0 1 8 3h9a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1.5 1.5 0 0 1-1.5-1.5z"/><path d="M9.5 3v18"/>',
+  document:
+    '<path d="M6.5 3.5h7l4 4v13h-11z"/><path d="M13.5 3.5v4h4"/><path d="M9.5 12h5M9.5 15h5M9.5 18h3"/>',
+  globe:
+    '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.2 2.4 3.3 5.4 3.3 8.5s-1.1 6.1-3.3 8.5c-2.2-2.4-3.3-5.4-3.3-8.5S9.8 5.9 12 3.5z"/>',
+  journal: '<rect x="4.5" y="4.5" width="15" height="15" rx="1"/><path d="M9 4.5v15M4.5 9h15"/>',
+  thesis:
+    '<path d="M12 4.5 21 9l-9 4.5L3 9z"/><path d="M7 11v4.4c0 1.4 2.2 2.6 5 2.6s5-1.2 5-2.6V11"/>',
+  audio: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.4"/>',
+  video:
+    '<circle cx="12" cy="12" r="8.5"/><path d="M10.5 8.8 16 12l-5.5 3.2z" fill="currentColor" stroke="none"/>',
+  map: '<path d="M9 4.5 3.5 7v12.5L9 17l6 2.5 5.5-2.5V4.5L15 7z"/><path d="M9 4.5V17M15 7v12.5"/>',
+  score: '<path d="M10 17.6V6l8-1.8v11.4"/><circle cx="8" cy="17.6" r="2.1"/><circle cx="16" cy="15.6" r="2.1"/>',
+  software: '<rect x="3.5" y="4.5" width="17" height="12" rx="1"/><path d="M8 20.5h8"/>',
+  image:
+    '<rect x="4" y="5" width="16" height="14" rx="1"/><circle cx="9" cy="10" r="1.6"/><path d="M5.5 17.5 10 13l3.5 3.5L16 14l3 3"/>',
+  manuscript:
+    '<path d="M5 5.5c2.4-1.6 4.8-1.6 7 0 2.2-1.6 4.6-1.6 7 0v13c-2.4-1.6-4.8-1.6-7 0-2.2-1.6-4.6-1.6-7 0z"/><path d="M12 5.5v13"/>',
+};
+
+const FORMAT_ICONS = {
+  Buch: 'book',
+  Lehrbuch: 'book',
+  'E-Book': 'book',
+  Schriftenreihe: 'book',
+  Nachschlagewerk: 'book',
+  Medium: 'book',
+  Aufsatz: 'document',
+  'Online-Artikel': 'document',
+  Konferenz: 'document',
+  Hochschulschrift: 'thesis',
+  Zeitschrift: 'journal',
+  Karte: 'map',
+  Noten: 'score',
+  Hörbuch: 'audio',
+  Audio: 'audio',
+  CD: 'audio',
+  DVD: 'video',
+  Video: 'video',
+  Datenbank: 'software',
+  Software: 'software',
+  Website: 'globe',
+  Bild: 'image',
+  Manuskript: 'manuscript',
+};
+
+const CHECK =
+  '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M11,16.5L18,9.5L16.59,8.09L11,13.67L7.91,10.58L6.5,12L11,16.5Z"/></svg>';
+
+const BOOKMARK_OUTLINE =
+  'M17,18L12,15.82L7,18V5H17M17,3H7A2,2 0 0,0 5,5V21L12,18L19,21V5C19,3.89 18.1,3 17,3Z';
+const BOOKMARK_FILLED = 'M17,3H7A2,2 0 0,0 5,5V21L12,18L19,21V5C19,3.89 18.1,3 17,3Z';
+
+function iconFor(record) {
+  const labels = record.formats.length ? record.formats : [record.type];
+  let name = labels.map((label) => FORMAT_ICONS[label]).find(Boolean);
+  if (!name && record.availability?.online) name = 'globe';
+  return `<svg ${ICON_ATTRS}>${ICONS[name || 'book']}</svg>`;
+}
 
 const INDEX_LABELS = {
   serverChoice: 'Alle Felder',
@@ -39,6 +129,7 @@ const LIVE_SEARCH_DEBOUNCE_MS = 450;
 
 const FACET_GROUPS = [
   { key: 'type', label: 'Typ' },
+  { key: 'author', label: 'Verfasser' },
   { key: 'decade', label: 'Jahrzehnt' },
   { key: 'language', label: 'Sprache' },
 ];
@@ -65,12 +156,17 @@ const state = {
   loading: false,
   controller: null,
   filters: emptyFilters(),
+  collapsed: new Set(),
   sort: 'relevance',
   citeRecord: null,
+  uidSeq: 0,
+  view: 'search',
+  clientId: '',
+  wishlist: new Map(),
 };
 
 function emptyFilters() {
-  return { type: new Set(), decade: new Set(), language: new Set() };
+  return { type: new Set(), author: new Set(), decade: new Set(), language: new Set() };
 }
 
 // ---------------------------------------------------------------- utilities
@@ -110,6 +206,97 @@ async function copyText(text) {
   }
 }
 
+// ---------------------------------------------------------------- wishlist
+
+const CLIENT_KEY = 'ublotse:client';
+
+/** Stable identity for a saved record — mirrors `wishlistKey` in server.js. */
+function wishlistKey(record) {
+  if (record?.id) return record.id;
+  return `t:${[record?.title, record?.year, record?.isbn?.[0]].filter(Boolean).join('~')}`;
+}
+
+/** One id per browser, minted once; the Android app will do the same per install. */
+function loadClientId() {
+  try {
+    const existing = localStorage.getItem(CLIENT_KEY);
+    if (existing) return existing;
+    const id = crypto.randomUUID();
+    localStorage.setItem(CLIENT_KEY, id);
+    return id;
+  } catch {
+    return 'local';
+  }
+}
+
+async function wishlistRequest(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', 'X-Client-Id': state.clientId, ...(options.headers || {}) },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+async function loadWishlist() {
+  try {
+    const data = await wishlistRequest('/api/wishlist');
+    state.wishlist = new Map(data.items.map((item) => [item.key, item]));
+  } catch (error) {
+    toast(`Merkliste nicht erreichbar: ${error.message}`);
+  }
+}
+
+/** Add or remove optimistically, then reconcile with the server. */
+async function toggleWish(record) {
+  const key = wishlistKey(record);
+  const existing = state.wishlist.get(key);
+
+  if (existing) {
+    state.wishlist.delete(key);
+    render();
+    try {
+      await wishlistRequest(`/api/wishlist/${encodeURIComponent(key)}`, { method: 'DELETE' });
+      toast('Aus der Merkliste entfernt');
+    } catch (error) {
+      state.wishlist.set(key, existing);
+      render();
+      toast(`Entfernen fehlgeschlagen: ${error.message}`);
+    }
+    return;
+  }
+
+  state.wishlist.set(key, { key, note: '', addedAt: new Date().toISOString(), record: { ...record } });
+  render();
+  try {
+    await wishlistRequest('/api/wishlist', { method: 'POST', body: JSON.stringify({ record }) });
+    toast('Zur Merkliste hinzugefügt');
+  } catch (error) {
+    state.wishlist.delete(key);
+    render();
+    toast(`Merken fehlgeschlagen: ${error.message}`);
+  }
+}
+
+/** Assign each record a handle so cards can be re-rendered without losing identity. */
+function registerRecords(records) {
+  for (const record of records) {
+    if (!record._uid) record._uid = `u${(state.uidSeq += 1)}`;
+    state.byUid.set(record._uid, record);
+  }
+  return records;
+}
+
+async function openWishlist() {
+  if (state.controller) state.controller.abort();
+  state.view = 'wishlist';
+  syncUrl();
+  render();
+  await loadWishlist();
+  render();
+}
+
 // ------------------------------------------------------------------ search
 
 async function runSearch({ append = false } = {}) {
@@ -120,6 +307,8 @@ async function runSearch({ append = false } = {}) {
     showWelcome();
     return;
   }
+
+  state.view = 'search';
 
   if (state.controller) state.controller.abort();
   const controller = new AbortController();
@@ -152,8 +341,7 @@ async function runSearch({ append = false } = {}) {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
 
-    for (const record of data.records) record._uid = crypto.randomUUID();
-    for (const record of data.records) state.byUid.set(record._uid, record);
+    registerRecords(data.records);
     state.records = append ? [...state.records, ...data.records] : data.records;
 
     state.page = data.page;
@@ -161,7 +349,7 @@ async function runSearch({ append = false } = {}) {
     state.tookMs = data.tookMs;
     state.cached = data.cached;
     state.hasMore = data.hasMore;
-    state.cql = data.cql;
+    state.cql = data.cqlDisplay || data.cql;
 
     syncUrl();
     render();
@@ -186,16 +374,23 @@ function facetCounts(records) {
     [...map].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'de')).slice(0, 10).map(([value, count]) => ({ value, count }));
 
   const type = new Map();
+  const author = new Map();
   const decade = new Map();
   const language = new Map();
 
   for (const record of records) {
     add(type, record.type);
+    for (const name of record.authors.map((a) => a.name)) add(author, name);
     if (record.year) add(decade, `${record.year.slice(0, 3)}0`);
     for (const lang of record.languages) add(language, lang);
   }
 
-  return { type: toList(type), decade: toList(decade), language: toList(language) };
+  return {
+    type: toList(type),
+    author: toList(author),
+    decade: toList(decade),
+    language: toList(language),
+  };
 }
 
 function activeFilterCount() {
@@ -203,16 +398,17 @@ function activeFilterCount() {
 }
 
 function visibleRecords() {
-  const { type, decade, language } = state.filters;
-  const anyFilter = type.size || decade.size || language.size;
+  const { type, author, decade, language } = state.filters;
+  const anyFilter = type.size || author.size || decade.size || language.size;
 
   let records = anyFilter
     ? state.records.filter((record) => {
         const recordDecade = record.year ? `${record.year.slice(0, 3)}0` : '';
         const typeOk = !type.size || type.has(record.type);
+        const authorOk = !author.size || record.authors.some((a) => author.has(a.name));
         const decadeOk = !decade.size || decade.has(recordDecade);
         const languageOk = !language.size || record.languages.some((l) => language.has(l));
-        return typeOk && decadeOk && languageOk;
+        return typeOk && authorOk && decadeOk && languageOk;
       })
     : [...state.records];
 
@@ -224,9 +420,20 @@ function visibleRecords() {
 // ------------------------------------------------------------------ render
 
 function render() {
-  renderBar();
-  renderFacets();
-  renderResults();
+  if (state.view === 'wishlist') renderWishlist();
+  else {
+    renderBar();
+    renderFacets();
+    renderResults();
+  }
+  renderWishBadge();
+}
+
+function renderWishBadge() {
+  const count = state.wishlist.size;
+  els.wishCount.textContent = String(count);
+  els.wishCount.hidden = count === 0;
+  els.wishToggle.setAttribute('aria-pressed', String(state.view === 'wishlist'));
 }
 
 function renderBar() {
@@ -272,18 +479,31 @@ function renderFacets() {
 
   const counts = facetCounts(state.records);
   const groups = FACET_GROUPS.filter(({ key }) => counts[key].length).map(({ key, label }) => {
+    const collapsed = state.collapsed.has(key);
     const items = counts[key]
-      .map(
-        ({ value, count }) => `
+      .map(({ value, count }) => {
+        const active = state.filters[key].has(value);
+        return `
           <li>
             <button type="button" class="facet" data-facet="${key}" data-value="${esc(value)}"
-              aria-pressed="${state.filters[key].has(value)}">
-              <span>${esc(value)}</span><span class="count">${count}</span>
+              title="${esc(value)}" aria-pressed="${active}">
+              <span class="mark" aria-hidden="true">${active ? '−' : '+'}</span>
+              <span class="text">${esc(value)}</span>
+              <span class="count">${count.toLocaleString('de-DE')}</span>
             </button>
-          </li>`,
-      )
+          </li>`;
+      })
       .join('');
-    return `<div class="facet-group"><h3>${esc(label)}</h3><ul class="facet-list">${items}</ul></div>`;
+    return `
+      <div class="facet-group${collapsed ? ' collapsed' : ''}" data-group="${key}">
+        <h3>
+          <button type="button" class="facet-toggle" data-toggle="${key}" aria-expanded="${!collapsed}">
+            <span>${esc(label)}</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.41,8.58L12,13.17L16.59,8.58L18,10L12,16L6,10L7.41,8.58Z" /></svg>
+          </button>
+        </h3>
+        <ul class="facet-list">${items}</ul>
+      </div>`;
   });
 
   const reset = activeFilterCount()
@@ -311,9 +531,26 @@ function renderResults() {
   attachCoverFallbacks();
 }
 
+function renderWishlist() {
+  const items = [...state.wishlist.values()].sort((a, b) => String(b.addedAt).localeCompare(String(a.addedAt)));
+  const records = registerRecords(items.map((item) => item.record));
+
+  els.facets.innerHTML = '';
+  els.more.hidden = true;
+  els.resultbar.innerHTML = `<span class="bits"><span><strong>${items.length}</strong> gemerkt</span></span><span class="spacer"></span>`;
+
+  if (!records.length) {
+    els.results.innerHTML = `<div class="state">Die Merkliste ist leer. Mit <strong>Merken</strong> sammeln Sie Treffer für später — auch über Sitzungen hinweg.</div>`;
+    return;
+  }
+
+  els.results.innerHTML = records.map(cardHtml).join('');
+  attachCoverFallbacks();
+}
+
 function cardHtml(record) {
   const authors = record.authors.length
-    ? `<p class="authors">${record.authors
+    ? `<p class="authors">von ${record.authors
         .slice(0, 6)
         .map(
           (author) =>
@@ -339,21 +576,34 @@ function cardHtml(record) {
     const availability = record.availability;
     if (!availability) return '';
     const parts = [];
-    if (availability.branch) parts.push(availability.branch);
-    if (availability.callnumbers.length) parts.push(availability.callnumbers.join(', '));
-    if (!parts.length && availability.online) parts.push('Online verfügbar');
-    return parts.length ? `<p class="holdings">${esc(parts.join(' · '))}</p>` : '';
+    if (availability.callnumbers.length) {
+      parts.push(
+        `<span class="holdings-label">Signatur:</span> <strong>${esc(availability.callnumbers.join(', '))}</strong>`,
+      );
+    }
+    if (availability.branch) {
+      parts.push(`<span class="holdings-label">Standort:</span> <strong>${esc(availability.branch)}</strong>`);
+    }
+    return parts.length ? `<p class="holdings">${parts.join(' ')}</p>` : '';
   })();
 
-  const subjects = record.subjects.length
-    ? `<ul class="chips">${record.subjects
-        .slice(0, 6)
-        .map(
-          (subject) =>
-            `<li><button type="button" class="chip" data-search="${esc(subject)}" data-index="subject">${esc(subject)}</button></li>`,
-        )
-        .join('')}</ul>`
-    : '';
+  const formats = (record.formats.length ? record.formats : [record.type]).slice(0, 2);
+  const badges = [
+    ...formats.map((format) => `<li><span class="badge">${esc(format)}</span></li>`),
+    record.availability?.online
+      ? `<li><span class="badge badge-ok">${CHECK}<span>Online verfügbar</span></span></li>`
+      : '',
+  ].join('');
+
+  const subjects = record.subjects
+    .slice(0, 6)
+    .map(
+      (subject) =>
+        `<li><button type="button" class="chip" data-search="${esc(subject)}" data-index="subject">${esc(subject)}</button></li>`,
+    )
+    .join('');
+
+  const chips = badges || subjects ? `<ul class="chips">${badges}${subjects}</ul>` : '';
 
   const ids = [
     ...record.isbn.map((v) => `ISBN ${v}`),
@@ -362,36 +612,39 @@ function cardHtml(record) {
   ];
   const idsHtml = ids.length ? `<p class="ids">${esc(ids.join('  ·  '))}</p>` : '';
 
-  const badges = (record.formats.length ? record.formats : [record.type])
-    .slice(0, 2)
-    .map((format) => `<span class="badge">${esc(format)}</span>`)
-    .join('');
-
   const online = record.urls[0];
 
   const cover = record.isbn.length
-    ? `<img class="cover" alt="" loading="lazy" src="https://katalog.ub.uni-leipzig.de/Cover/Show?isbn=${encodeURIComponent(record.isbn[0])}&size=medium">`
+    ? `<img class="cover" alt="" loading="lazy" decoding="async" src="/api/cover?isbn=${encodeURIComponent(record.isbn[0])}&size=medium">`
     : '';
+
+  const saved = state.wishlist.has(wishlistKey(record));
+  const wish = `<button type="button" class="wish${saved ? ' is-saved' : ''}" data-wish="${record._uid}" aria-pressed="${saved}"
+    title="${saved ? 'Aus der Merkliste entfernen' : 'Zur Merkliste hinzufügen'}">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="${saved ? BOOKMARK_FILLED : BOOKMARK_OUTLINE}" /></svg>
+    <span>${saved ? 'Gemerkt' : 'Merken'}</span>
+  </button>`;
 
   return `
     <article class="card" data-uid="${record._uid}">
-      ${cover}
+      <div class="format-icon">${iconFor(record)}</div>
       <div class="card-main">
-        <div class="card-top">${badges}${record.year ? `<span class="year">${esc(record.year)}</span>` : ''}</div>
         <h3><a href="${esc(record.recordUrl)}" target="_blank" rel="noopener">${esc(record.title)}</a></h3>
         ${record.subtitle ? `<p class="subtitle">${esc(record.subtitle)}</p>` : ''}
         ${authors}
         ${parent}
         ${imprint}
         ${holdings}
-        ${subjects}
+        ${chips}
         ${idsHtml}
         <div class="actions">
           <a href="${esc(record.recordUrl)}" target="_blank" rel="noopener">Im Katalog</a>
+          ${wish}
           <button type="button" data-cite="${record._uid}">Zitieren</button>
           ${online ? `<a href="${esc(online)}" target="_blank" rel="noopener">Online-Zugang</a>` : ''}
         </div>
       </div>
+      ${cover}
     </article>`;
 }
 
@@ -424,6 +677,7 @@ function renderError(message) {
 }
 
 function showWelcome() {
+  state.view = 'search';
   state.q = '';
   state.records = [];
   state.total = 0;
@@ -436,8 +690,9 @@ function showWelcome() {
   els.more.hidden = true;
   els.results.innerHTML = `
     <div class="welcome">
-      <h1>Finden statt warten.</h1>
-      <p>lunibib fragt den Leipziger Katalog direkt über die offene SRU-Schnittstelle ab —
+      <h1>Universitätsbibliothek Leipzig (UBL)</h1>
+      <h2>Finden statt warten.</h2>
+      <p>UBLotse fragt den Leipziger Katalog direkt über die offene SRU-Schnittstelle ab —
       ohne die Theme-Skripte, die die offizielle Oberfläche langsam machen.</p>
       <ul class="welcome-tips">
         <li><kbd>/</kbd> fokussiert das Suchfeld</li>
@@ -473,7 +728,7 @@ function bibtexFor(record) {
           : 'book';
 
   const names = record.authors.map((author) => author.name);
-  const surname = names[0]?.split(',')[0]?.replace(/[^\p{L}\p{N}]/gu, '') || 'lunibib';
+  const surname = names[0]?.split(',')[0]?.replace(/[^\p{L}\p{N}]/gu, '') || 'ublotse';
   const key = `${surname}${record.year || ''}`;
 
   const fields = [];
@@ -538,6 +793,17 @@ els.resultbar.addEventListener('change', (event) => {
 });
 
 els.facets.addEventListener('click', (event) => {
+  const toggle = event.target.closest('[data-toggle]');
+  if (toggle) {
+    const key = toggle.dataset.toggle;
+    if (state.collapsed.has(key)) state.collapsed.delete(key);
+    else state.collapsed.add(key);
+    const collapsed = state.collapsed.has(key);
+    toggle.closest('.facet-group').classList.toggle('collapsed', collapsed);
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    return;
+  }
+
   const reset = event.target.closest('#facet-reset');
   if (reset) {
     state.filters = emptyFilters();
@@ -555,6 +821,13 @@ els.facets.addEventListener('click', (event) => {
 });
 
 els.results.addEventListener('click', (event) => {
+  const wishButton = event.target.closest('[data-wish]');
+  if (wishButton) {
+    const record = state.byUid.get(wishButton.dataset.wish);
+    if (record) toggleWish(record);
+    return;
+  }
+
   const searchButton = event.target.closest('[data-search]');
   if (searchButton) {
     els.query.value = searchButton.dataset.search;
@@ -578,6 +851,30 @@ els.dialog.addEventListener('click', async (event) => {
   if (await copyText(text)) toast(copyButton.dataset.copy === 'bibtex' ? 'BibTeX kopiert' : 'Zitat kopiert');
 });
 
+els.wishToggle.addEventListener('click', () => {
+  if (state.view === 'wishlist') {
+    state.view = 'search';
+    syncUrl();
+    render();
+  } else {
+    openWishlist();
+  }
+});
+
+els.themeToggle.addEventListener('click', () => {
+  const next = effectiveTheme() === 'dark' ? 'light' : 'dark';
+  try {
+    localStorage.setItem(THEME_KEY, next);
+  } catch {
+    /* private mode — the choice just will not stick */
+  }
+  applyTheme(next);
+});
+
+darkQuery.addEventListener('change', () => {
+  if (!document.documentElement.dataset.theme) applyTheme(null);
+});
+
 document.addEventListener('keydown', (event) => {
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName || '');
   if (event.key === '/' && !typing) {
@@ -595,6 +892,10 @@ window.addEventListener('popstate', () => {
   const params = new URLSearchParams(location.search);
   els.query.value = params.get('q') || '';
   els.index.value = params.get('index') || 'serverChoice';
+  if (params.get('view') === 'wishlist') {
+    openWishlist();
+    return;
+  }
   if (els.query.value) runSearch();
   else showWelcome();
 });
@@ -603,6 +904,7 @@ const liveSearch = debounce(() => runSearch(), LIVE_SEARCH_DEBOUNCE_MS);
 
 function syncUrl() {
   const params = new URLSearchParams();
+  if (state.view === 'wishlist') params.set('view', 'wishlist');
   if (state.q) params.set('q', state.q);
   if (state.index && state.index !== 'serverChoice') params.set('index', state.index);
   const query = params.toString();
@@ -612,7 +914,20 @@ function syncUrl() {
 // --------------------------------------------------------------------- init
 
 (function init() {
+  applyTheme(document.documentElement.dataset.theme || null);
+  state.clientId = loadClientId();
+
   const params = new URLSearchParams(location.search);
+  if (params.get('view') === 'wishlist') {
+    openWishlist();
+    return;
+  }
+
+  loadWishlist().then(() => {
+    renderWishBadge();
+    if (state.records.length) render(); // fill in the “Merken” states once loaded
+  });
+
   const q = params.get('q');
   if (q) {
     els.query.value = q;

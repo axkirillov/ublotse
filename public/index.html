@@ -3,36 +3,119 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>lunibib — Katalog der Universitätsbibliothek Leipzig</title>
+    <title>UBLotse — Katalog der Universitätsbibliothek Leipzig</title>
     <meta
       name="description"
       content="Eine schnelle, aufgeräumte Oberfläche für den Katalog der Universitätsbibliothek Leipzig."
     />
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231f5d4c'/%3E%3Cpath d='M9 8h11a3 3 0 0 1 3 3v13H12a3 3 0 0 1-3-3z' fill='%23fff'/%3E%3Cpath d='M9 8v13a3 3 0 0 0 3 3' stroke='%231f5d4c' stroke-width='1.5' fill='none'/%3E%3C/svg%3E" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='3' fill='%23284156'/%3E%3Cpath d='M9 8h11a3 3 0 0 1 3 3v13H12a3 3 0 0 1-3-3z' fill='%23fff'/%3E%3Cpath d='M9 8v13a3 3 0 0 0 3 3' stroke='%23284156' stroke-width='1.5' fill='none'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap"
+    />
+    <script>
+      // Set the colour mode before first paint, so the theme never flashes.
+      try {
+        const theme = localStorage.getItem('ublotse:theme');
+        if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme;
+      } catch {}
+    </script>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
     <a class="skip-link" href="#results">Zu den Treffern springen</a>
 
-    <header class="masthead">
-      <div class="masthead-inner">
-        <div class="brand">
+    <header class="site-header">
+      <div class="header-shape" aria-hidden="true">
+        <span class="shape-navy"></span>
+        <span class="shape-blue"></span>
+      </div>
+
+      <div class="banner">
+        <a class="brand" href="./">
           <span class="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 32 32" width="26" height="26">
-              <rect width="32" height="32" rx="7" fill="currentColor" />
-              <path d="M9 8h11a3 3 0 0 1 3 3v13H12a3 3 0 0 1-3-3z" fill="#fff" />
-              <path d="M9 8v13a3 3 0 0 0 3 3" stroke="currentColor" stroke-width="1.5" fill="none" />
+            <svg viewBox="0 0 32 32" width="34" height="34">
+              <path d="M8 5h12a4 4 0 0 1 4 4v18H11a3 3 0 0 1-3-3z" fill="currentColor" />
+              <path d="M8 5v19a3 3 0 0 0 3 3" stroke="currentColor" stroke-width="1.6" fill="none" />
+              <path d="M13 11h8M13 15h8M13 19h5" stroke="#fff" stroke-width="1.6" stroke-linecap="round" />
             </svg>
           </span>
           <span class="brand-text">
-            <strong>lunibib</strong>
-            <small>Katalog UB Leipzig, schnell</small>
+            <strong>UBLotse</strong>
+            <span>Katalog der Universitätsbibliothek Leipzig</span>
           </span>
-        </div>
+        </a>
 
+        <nav class="topnav" aria-label="Weitere Angebote">
+          <a class="topnav-item" href="https://sru.finc.info/de15?operation=explain&amp;version=1.1" target="_blank" rel="noopener">
+            <span class="topnav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4,6H20V8H4V6M4,11H20V13H4V11M4,16H20V18H4V16Z" /></svg>
+            </span>
+            <span>SRU-Schnittstelle</span>
+          </a>
+          <button
+            type="button"
+            class="topnav-item topnav-wish"
+            id="wishlist-toggle"
+            aria-label="Merkliste"
+            title="Merkliste"
+            aria-pressed="false"
+          >
+            <span class="topnav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M17,3H7A2,2 0 0,0 5,5V21L12,18L19,21V5C19,3.89 18.1,3 17,3Z" />
+              </svg>
+            </span>
+            <span>Merkliste</span>
+            <span class="count-badge" id="wishlist-count" hidden>0</span>
+          </button>
+          <button
+            type="button"
+            class="topnav-item topnav-toggle"
+            id="theme-toggle"
+            aria-label="Farbmodus wechseln"
+            title="Farbmodus wechseln"
+            aria-pressed="false"
+          >
+            <span class="topnav-icon" aria-hidden="true">
+              <svg class="icon-moon" viewBox="0 0 24 24">
+                <path d="M17.75,4.09L15.22,6.03L16.13,9.09L13.5,7.28L10.87,9.09L11.78,6.03L9.25,4.09L12.44,4L13.5,1L14.56,4L17.75,4.09M21.25,11L19.61,12.25L20.2,14.23L18.5,13.06L16.8,14.23L17.39,12.25L15.75,11L17.81,10.95L18.5,9L19.19,10.95L21.25,11M18.97,15.95C19.8,15.87 20.69,17.05 20.16,17.8C19.84,18.25 19.5,18.67 19.08,19.07C15.17,23 8.84,23 4.94,19.07C1.03,15.17 1.03,8.83 4.94,4.93C5.34,4.53 5.76,4.17 6.21,3.85C6.96,3.32 8.14,4.21 8.06,5.04C7.79,7.9 8.75,10.87 10.95,13.06C13.14,15.26 16.1,16.22 18.97,15.95Z" />
+              </svg>
+              <svg class="icon-sun" viewBox="0 0 24 24">
+                <path d="M3.55,19.09L4.96,20.5L6.76,18.71L5.34,17.29M12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16M11,2H13V4H11M20.5,5.34L19.09,3.93L17.29,5.72L18.71,7.14M20.5,18.34L19.09,19.75L17.29,17.96L18.71,16.54M3.55,4.91L4.96,3.5L6.76,5.29L5.34,6.71M11,20H13V22H11M2,11H4V13H2M20,11H22V13H20Z" />
+              </svg>
+            </span>
+          </button>
+          <a class="topnav-cta" href="https://katalog.ub.uni-leipzig.de" target="_blank" rel="noopener">
+            <span class="topnav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12,3L20,9V21H15V14H9V21H4V9L12,3Z" /></svg>
+            </span>
+            <span>Original-Katalog</span>
+          </a>
+        </nav>
+      </div>
+
+      <div class="search-band">
         <form class="search" id="search-form" role="search" autocomplete="off">
-          <label class="field index-field">
-            <span class="sr-only">Suchfeld</span>
+          <div class="query-field">
+            <label class="sr-only" for="query">Suchbegriffe</label>
+            <input
+              id="query"
+              name="q"
+              type="search"
+              placeholder="Suchbegriffe"
+              autofocus
+              spellcheck="false"
+            />
+            <button type="button" class="reset" id="clear" tabindex="-1" aria-label="Suche löschen" title="Leeren (Esc)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19M8,9H16V19H8V9M15.5,4L14.5,3H9.5L8.5,4H5V6H19V4H15.5Z" /></svg>
+            </button>
+          </div>
+
+          <div class="type-field">
+            <label class="sr-only" for="index">Suchtyp</label>
             <select id="index" name="index">
               <option value="serverChoice">Alle Felder</option>
               <option value="title">Titel</option>
@@ -43,59 +126,88 @@
               <option value="issn">ISSN</option>
               <option value="anywhere">Volltext</option>
             </select>
-          </label>
+          </div>
 
-          <label class="field query-field">
-            <span class="sr-only">Suchbegriff</span>
-            <input
-              id="query"
-              name="q"
-              type="search"
-              placeholder="Titel, Verfasser, Schlagwort, ISBN …"
-              autofocus
-              spellcheck="false"
-            />
-          </label>
+          <button type="submit" class="search-submit">
+            <span class="sr-only">Finden</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z" /></svg>
+          </button>
 
-          <button type="submit" class="primary">Suchen</button>
-          <button type="button" class="ghost" id="clear" title="Leeren (Esc)">Leeren</button>
+          <a class="advanced" href="https://katalog.ub.uni-leipzig.de/Search/Advanced" target="_blank" rel="noopener">Erweitert</a>
         </form>
       </div>
     </header>
 
-    <main class="layout">
-      <aside class="facets" id="facets" aria-label="Filter"></aside>
+    <main class="page">
+      <div class="layout">
+        <section class="results-pane">
+          <div class="resultbar" id="resultbar" aria-live="polite"></div>
+          <div id="results" class="results">
+            <div class="welcome">
+              <h1>Universitätsbibliothek Leipzig (UBL)</h1>
+              <h2>Finden statt warten.</h2>
+              <p>
+                UBLotse fragt den Leipziger Katalog direkt über die offene SRU-Schnittstelle ab —
+                ohne die Theme-Skripte, die die offizielle Oberfläche langsam machen.
+              </p>
+              <ul class="welcome-tips">
+                <li><kbd>/</kbd> fokussiert das Suchfeld</li>
+                <li><kbd>Enter</kbd> sucht, <kbd>Esc</kbd> leert</li>
+                <li>Verfasser und Schlagwörter sind anklickbar</li>
+              </ul>
+            </div>
+          </div>
+          <div class="more-row">
+            <button type="button" id="more" class="btn-more" hidden>Mehr laden</button>
+          </div>
+        </section>
 
-      <section class="results-pane">
-        <div class="resultbar" id="resultbar" aria-live="polite"></div>
-        <div id="results" class="results">
-          <div class="welcome">
-            <h1>Finden statt warten.</h1>
-            <p>
-              lunibib fragt den Leipziger Katalog direkt über die offene SRU-Schnittstelle ab —
-              ohne die Theme-Skripte, die die offizielle Oberfläche langsam machen.
-            </p>
-            <ul class="welcome-tips">
-              <li><kbd>/</kbd> fokussiert das Suchfeld</li>
-              <li><kbd>Enter</kbd> sucht, <kbd>Esc</kbd> leert</li>
-              <li>Verfasser und Schlagwörter sind anklickbar</li>
+        <aside class="facets" id="facets" aria-label="Filter"></aside>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-shape" aria-hidden="true">
+        <span class="shape-light"></span>
+        <span class="shape-navy"></span>
+      </div>
+      <div class="footer-inner">
+        <div class="footer-cols">
+          <div class="footer-col">
+            <h2>Katalog</h2>
+            <ul>
+              <li><a href="https://katalog.ub.uni-leipzig.de/Search/History" target="_blank" rel="noopener">Suchverlauf</a></li>
+              <li><a href="https://katalog.ub.uni-leipzig.de/Search/Advanced" target="_blank" rel="noopener">Erweiterte Suche</a></li>
+              <li><a href="https://katalog.ub.uni-leipzig.de/Browse/Title" target="_blank" rel="noopener">Titel durchblättern</a></li>
+            </ul>
+          </div>
+          <div class="footer-col">
+            <h2>Rückmeldung</h2>
+            <p>Fragen oder Fehler? Schreiben Sie uns.</p>
+            <a class="footer-cta" href="mailto:katalog@ub.uni-leipzig.de">Kontakt</a>
+          </div>
+          <div class="footer-col">
+            <h2>Weitere Informationen</h2>
+            <ul>
+              <li><a href="https://www.ub.uni-leipzig.de/index.php?id=1098" target="_blank" rel="noopener">Barrierefreiheit</a></li>
+              <li><a href="https://www.ub.uni-leipzig.de/index.php?id=1326" target="_blank" rel="noopener">Datenschutz</a></li>
+              <li><a href="https://www.ub.uni-leipzig.de/index.php?id=1836" target="_blank" rel="noopener">Impressum</a></li>
+              <li><a href="https://www.uni-leipzig.de/" target="_blank" rel="noopener">Universität Leipzig</a></li>
             </ul>
           </div>
         </div>
-        <div class="more-row">
-          <button type="button" id="more" class="ghost" hidden>Mehr laden</button>
-        </div>
-      </section>
-    </main>
 
-    <footer class="footer">
-      <span>
-        Daten: <a href="https://sru.finc.info/de15?operation=explain&amp;version=1.1" target="_blank" rel="noopener">SRU
-        <code>sru.finc.info/de15</code></a> · Solr-Schema · max. 100 Treffer pro Abfrage
-      </span>
-      <span>
-        <a href="https://katalog.ub.uni-leipzig.de" target="_blank" rel="noopener">Original-Katalog</a>
-      </span>
+        <div class="footer-base">
+          <span>
+            Daten:
+            <a href="https://sru.finc.info/de15?operation=explain&amp;version=1.1" target="_blank" rel="noopener">
+              SRU <code>sru.finc.info/de15</code>
+            </a>
+            · Solr-Schema · max. 100 Treffer pro Abfrage
+          </span>
+          <span>UBLotse ist ein unabhängiger Prototyp, kein Angebot der UBL.</span>
+        </div>
+      </div>
     </footer>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -103,20 +215,20 @@
     <dialog id="cite-dialog" class="cite-dialog">
       <form method="dialog" class="cite-head">
         <h2 id="cite-title">Zitieren</h2>
-        <button class="ghost" value="close" aria-label="Schließen">Schließen</button>
+        <button class="btn-plain" value="close" aria-label="Schließen">Schließen</button>
       </form>
       <div class="cite-body">
         <section>
           <div class="cite-label">
             <span>Zitat</span>
-            <button type="button" class="ghost small" data-copy="citation">Kopieren</button>
+            <button type="button" class="btn-plain small" data-copy="citation">Kopieren</button>
           </div>
           <pre id="cite-citation"></pre>
         </section>
         <section>
           <div class="cite-label">
             <span>BibTeX</span>
-            <button type="button" class="ghost small" data-copy="bibtex">Kopieren</button>
+            <button type="button" class="btn-plain small" data-copy="bibtex">Kopieren</button>
           </div>
           <pre id="cite-bibtex"></pre>
         </section>

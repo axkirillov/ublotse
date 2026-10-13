@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Everything the app fetches from the outside world is https. The one exception is the app's own
+  frontend, which is served by a loopback server on 127.0.0.1 so that the WebView gets a real
+  origin and ordinary same-origin POSTs work.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>
