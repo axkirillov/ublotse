@@ -1303,8 +1303,17 @@ kbd {
     gap: 1.5rem;
   }
 
+  /* Filters lead the page on phones: as the second column they land below the
+     whole result list, where they are easy to miss. */
   .facets {
     position: static;
+    order: -1;
+  }
+
+  .facets::before {
+    content: "Filter";
+    font-weight: 700;
+    color: var(--ink);
   }
 
   .search .query-field {

@@ -29,6 +29,8 @@ const els = {
 
 const THEME_KEY = 'ublotse:theme';
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+// Must agree with the facet breakpoint in style.css.
+const narrowQuery = window.matchMedia('(max-width: 860px)');
 
 /** The chosen mode, or whatever the operating system prefers. */
 function effectiveTheme() {
@@ -471,10 +473,19 @@ function renderBar() {
   `;
 }
 
+// On phones the panel sits above the results, so its groups start closed; left
+// open, four groups of ten would push the first hit off screen.
+let facetDefaultsApplied = false;
+
 function renderFacets() {
   if (!state.records.length) {
     els.facets.innerHTML = '';
     return;
+  }
+
+  if (!facetDefaultsApplied) {
+    facetDefaultsApplied = true;
+    if (narrowQuery.matches) for (const { key } of FACET_GROUPS) state.collapsed.add(key);
   }
 
   const counts = facetCounts(state.records);
