@@ -23,8 +23,9 @@ import java.util.UUID;
 
 /**
  * The whole app: start a loopback server, point a WebView at it, hand every outbound link to the
- * system browser. The frontend in {@code assets/public} is the very same directory the Node
- * prototype serves — no build step, no rewriting of paths.
+ * system browser, and offer released updates from inside the app. The frontend in {@code
+ * assets/public} is the very same directory the Node prototype serves — no build step, no rewriting
+ * of paths.
  */
 public class MainActivity extends Activity {
 
@@ -126,7 +127,15 @@ public class MainActivity extends Activity {
         });
 
     setContentView(webView);
+
+    // The page finds this as window.Ublotse and uses it for the “Nach Updates suchen” entry in the
+    // footer; a browser has no such object, so the entry stays hidden there.
+    webView.addJavascriptInterface(new Updater.Bridge(this), "Ublotse");
+
     webView.loadUrl("http://127.0.0.1:" + port + "/");
+
+    // At most once a day, and never a dialog unless there is something to install.
+    Updater.checkOnLaunch(this);
   }
 
   private static boolean isLoopback(Uri uri) {
@@ -159,6 +168,13 @@ public class MainActivity extends Activity {
     view.setPadding(48, 96, 48, 48);
     setContentView(view, new ViewGroup.LayoutParams(-1, -1));
     return view;
+  }
+
+  @Override
+  protected void onResume() {
+    super.onResume();
+    // Returning from the “install unknown apps” settings screen is how a pending update proceeds.
+    Updater.resumePendingInstall(this);
   }
 
   @Override

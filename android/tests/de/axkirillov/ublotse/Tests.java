@@ -54,6 +54,9 @@ public final class Tests {
     section("cover proxy");
     coverProxy();
 
+    section("in-app updates");
+    updateCheck();
+
     section("wishlist SQL");
     wishlistSql(parityDirectory);
     wishlistSchema();
@@ -236,6 +239,56 @@ public final class Tests {
     } catch (IOException failure) {
       check("cover proxy", false, failure.toString());
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // In-app updates
+  // -------------------------------------------------------------------------
+
+  private static void updateCheck() {
+    // The shape of GET /repos/axkirillov/ublotse/releases/latest, with a second asset so that
+    // picking the APK is actually tested rather than assumed.
+    String payload =
+        "{\"tag_name\":\"v0.1.1\",\"html_url\":\"https://github.com/axkirillov/ublotse/releases/tag/v0.1.1\","
+            + "\"draft\":false,\"prerelease\":false,\"assets\":["
+            + "{\"name\":\"checksums.txt\",\"size\":80,\"browser_download_url\":\"https://example.invalid/checksums.txt\"},"
+            + "{\"name\":\"ublotse.apk\",\"size\":62227,"
+            + "\"browser_download_url\":\"https://github.com/axkirillov/ublotse/releases/download/v0.1.1/ublotse.apk\"}]}";
+
+    Update.Release release = Update.parse(payload);
+    check("a release payload is read", release != null, "the payload did not parse");
+    if (release != null) {
+      eq("tag_name becomes the version", "0.1.1", release.version);
+      eq(
+          "the APK asset is chosen, not whatever comes first",
+          "https://github.com/axkirillov/ublotse/releases/download/v0.1.1/ublotse.apk",
+          release.apkUrl);
+      eq("the asset size comes along", 62227L, release.apkSize);
+      eq("the download is cached per version", "ublotse-0.1.1.apk", release.fileName());
+    }
+
+    Update.Release noSize =
+        Update.parse(
+            "{\"tag_name\":\"v2\",\"assets\":[{\"name\":\"ublotse.apk\",\"browser_download_url\":\"https://example.invalid/x.apk\"}]}");
+    check("a download without a reported size is still usable", noSize != null && noSize.apkSize == 0, "size handling");
+
+    eq("v0.1.1 normalises", "0.1.1", Update.normalize("v0.1.1"));
+    check("a nightly tag is not a version", Update.normalize("nightly") == null, "accepted 'nightly'");
+    check("a bare v is not a version", Update.normalize("v") == null, "accepted 'v'");
+
+    eq("0.2.0 is newer than 0.1.9", 1, Update.compare("0.2.0", "0.1.9"));
+    eq("0.1.9 is older than 0.2.0", -1, Update.compare("0.1.9", "0.2.0"));
+    eq("0.10 beats 0.9 numerically, not as text", 1, Update.compare("0.10", "0.9"));
+    eq("0.1 and 0.1.0 are the same version", 0, Update.compare("0.1", "0.1.0"));
+    check("0.1.1 is an update over 0.1.0", Update.isNewer("0.1.1", "0.1.0"), "not newer");
+    check("the same version is not an update", !Update.isNewer("0.1.0", "0.1.0"), "updated itself");
+    check("an older release is not an update", !Update.isNewer("0.1.0", "0.2.0"), "offered a downgrade");
+
+    check("a release without an APK asset is ignored", Update.parse("{\"tag_name\":\"v0.1.2\",\"assets\":[]}") == null, "");
+    check("an APK under another name is ignored", Update.parse("{\"tag_name\":\"v0.1.2\",\"assets\":[{\"name\":\"app.apk\",\"browser_download_url\":\"https://example.invalid/a.apk\"}]}") == null, "");
+    check("a payload without a tag is ignored", Update.parse("{\"assets\":[]}") == null, "");
+    check("malformed JSON is ignored", Update.parse("<html>rate limited</html>") == null, "");
+    check("a JSON array is ignored", Update.parse("[]") == null, "");
   }
 
   // -------------------------------------------------------------------------

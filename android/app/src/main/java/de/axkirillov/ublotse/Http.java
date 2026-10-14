@@ -24,6 +24,15 @@ public final class Http {
       this.contentType = contentType;
       this.body = body;
     }
+
+    /** The body as text. SRU, JSON and the GitHub API are all UTF-8. */
+    public String text() {
+      try {
+        return new String(body, "UTF-8");
+      } catch (UnsupportedEncodingException impossible) {
+        throw new IllegalStateException(impossible);
+      }
+    }
   }
 
   public static Map<String, String> headers(String... keyValues) {

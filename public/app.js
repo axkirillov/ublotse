@@ -23,6 +23,9 @@ const els = {
   themeToggle: document.getElementById('theme-toggle'),
   wishToggle: document.getElementById('wishlist-toggle'),
   wishCount: document.getElementById('wishlist-count'),
+  update: document.getElementById('app-update'),
+  appVersion: document.getElementById('app-version'),
+  updateCheck: document.getElementById('update-check'),
 };
 
 // ------------------------------------------------------------------- theme
@@ -920,6 +923,20 @@ function syncUrl() {
   if (state.index && state.index !== 'serverChoice') params.set('index', state.index);
   const query = params.toString();
   history.replaceState(null, '', query ? `?${query}` : location.pathname);
+}
+
+// ----------------------------------------------------------------- updates
+
+// The Android app injects window.Ublotse; a plain browser has no way to install anything, so the
+// footer entry stays hidden there. Probing for the bridge rather than for the platform keeps this
+// page the same file in both.
+const appBridge = window.Ublotse;
+
+if (appBridge && typeof appBridge.checkForUpdates === 'function') {
+  const version = typeof appBridge.version === 'function' ? appBridge.version() : '';
+  els.update.hidden = false;
+  els.appVersion.textContent = version ? `UBLotse ${version} · ` : '';
+  els.updateCheck.addEventListener('click', () => appBridge.checkForUpdates());
 }
 
 // --------------------------------------------------------------------- init

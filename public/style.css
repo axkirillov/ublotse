@@ -1154,6 +1154,18 @@ kbd {
   color: inherit;
 }
 
+/* A button that reads as the links beside it — the update entry, app only. */
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
 /* ================================================================= Dialog */
 
 .toast {

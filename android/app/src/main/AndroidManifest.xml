@@ -5,6 +5,11 @@
     <!-- The app talks to the SRU API, the cover services, and its own loopback server. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- The updater downloads a release and hands it to the installer; without this the install
+         intent is silently ignored on API 26+. Nothing is installed without the user's consent,
+         which the system asks for separately. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <application
         android:label="@string/app_name"
         android:icon="@drawable/ic_launcher"
@@ -24,5 +29,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Serves the downloaded APK to the installer: read-only, not exported, one directory. -->
+        <provider
+            android:name=".UpdateFilesProvider"
+            android:authorities="de.axkirillov.ublotse.updates"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

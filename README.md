@@ -280,13 +280,35 @@ The build signs with `android/debug.keystore`, generated on first run and git-ig
 **self-signed local key, not a Play Store key**: fine for sideloading, and Android will refuse
 to update an install that a different key signed.
 
+### Updates
+
+There is no store listing, so the app updates itself from GitHub Releases. Once a day on
+launch — and on demand from *Nach Updates suchen* in the page footer — it asks
+`api.github.com/repos/axkirillov/ublotse/releases/latest`, compares the tag against its own
+`versionName`, downloads `ublotse.apk` and hands it to the system installer. The footer entry
+appears only where the app provides `window.Ublotse`: the WebView injects it, a browser has no
+way to install anything, so the page stays one file.
+
+Two of Android's rules do the awkward parts. Installing an unknown app needs
+`REQUEST_INSTALL_PACKAGES` in the manifest *and* the user's consent in Settings (API 26+), so
+the first update walks through that screen once and then continues on its own. And since
+`targetSdk 34` the installer rejects `file://` URIs, so the downloaded APK is shared through
+`UpdateFilesProvider` — a hand-written, read-only, unexported `ContentProvider`, which is the
+whole of what this app needs from AndroidX's `FileProvider`.
+
+Android compares signatures, not versions, to decide whether an install may be replaced: the
+signing key has to stay the one it was installed with, so `android/debug.keystore` is kept
+across builds. And the updater compares `versionName`, so any build worth shipping needs its
+`package.json` version bumped, or the installed app will never be offered it.
+
 ### Tests
 
 `npm run android:test` needs no emulator. It generates fixtures from `server.js`, then checks
 the Java port against them: byte-identical CQL for ~600 query/index combinations, the same
 SRU parsing, the same JSON on the wire, the same facets, cover proxying against fake upstreams,
-the wishlist API and DDL (run for real through the `sqlite3` CLI), and the loopback server over
-raw sockets — including the `Expect: 100-continue` handshake Chromium uses for larger bodies.
+the release payload and version comparison behind the in-app updater, the wishlist API and DDL
+(run for real through the `sqlite3` CLI), and the loopback server over raw sockets — including
+the `Expect: 100-continue` handshake Chromium uses for larger bodies.
 
 ## Roadmap
 
