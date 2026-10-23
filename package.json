@@ -1,6 +1,6 @@
 {
   "name": "ublotse",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "A faster, cleaner frontend for the Leipzig University Library catalogue (UBL), powered by the open finc SRU API.",

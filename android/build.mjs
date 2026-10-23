@@ -31,7 +31,14 @@ const TARGET_SDK = 34; // 34 on purpose: 35 would make edge-to-edge mandatory
 
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 const VERSION_NAME = pkg.version || '0.1.0';
-const VERSION_CODE = Number(process.env.VERSION_CODE || 1);
+const VERSION_CODE = Number(process.env.VERSION_CODE || semverCode(VERSION_NAME));
+
+// aapt2 wants a monotonically increasing integer; 0.2.1 -> 201 keeps patch releases above older
+// codes without hand-editing this file each time.
+function semverCode(name) {
+  const [major = 0, minor = 0, patch = 0] = name.split(".").map((part) => Number(part) || 0);
+  return major * 10000 + minor * 100 + patch;
+}
 
 // ---------------------------------------------------------------------------
 // Toolchain discovery
