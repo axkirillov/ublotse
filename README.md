@@ -96,6 +96,9 @@ Traps worth recording:
 - Exact permalinks to the record in the official catalogue.
 - Book covers (proxied around finc's cookie gate, with an OpenLibrary fallback).
 - A **wishlist** that survives restarts, stored in SQLite and keyed per client.
+- **Mein Konto**: sign in with the library card number to list current loans with due dates
+  and a renew button. Credentials are passed through to the catalogue, never stored; the
+  session cookie is held in memory per client for 30 idle minutes.
 - Client-side facets (type, author, decade, language) and sorting over the loaded results.
 - “Cite” dialog with a formatted citation and BibTeX, copy to clipboard.
 - In-memory response cache; the UI shows whether a result came from SRU or the cache.
@@ -205,9 +208,14 @@ use exactly what the web frontend uses.
 | `GET /api/wishlist` | The caller's saved records |
 | `POST /api/wishlist` | Body `{"record": {…}}` — upsert by record id |
 | `DELETE /api/wishlist/:key` | Remove one saved record |
+| `GET /api/account` | Whether this client has a catalogue session |
+| `POST /api/account/login` | Body `{"username": … , "password": …}` — VuFind ILS login |
+| `POST /api/account/logout` | Drop the session server-side and upstream |
+| `GET /api/account/loans` | Parsed loans: title, author, due date, record and renew links |
+| `POST /api/account/renew` | Body `{"href": "…"}` — follow a renew link from the loans page |
 | `GET /api/health` | Upstream + SQLite reachability |
 
-There are no accounts yet. The client mints one opaque id, stores it, and sends it as the
+UBLotse has no user accounts of its own. The client mints one opaque id, stores it, and sends it as the
 `X-Client-Id` header (or `?client=`); requests without a valid id share a `local` list, which
 keeps `curl` usable. A record's key is its VuFind id (`0-…`, `ai-…`), so the same work has the
 same key on every device.

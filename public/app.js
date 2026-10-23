@@ -22,6 +22,7 @@ const els = {
   citeBibtex: document.getElementById('cite-bibtex'),
   themeToggle: document.getElementById('theme-toggle'),
   wishToggle: document.getElementById('wishlist-toggle'),
+  accountToggle: document.getElementById('account-toggle'),
   wishCount: document.getElementById('wishlist-count'),
   update: document.getElementById('app-update'),
   appVersion: document.getElementById('app-version'),
@@ -168,6 +169,7 @@ const state = {
   view: 'search',
   clientId: '',
   wishlist: new Map(),
+  account: { loggedIn: false, username: '', loans: [], fetchedAt: '', loading: false, error: '' },
 };
 
 function emptyFilters() {
@@ -302,6 +304,186 @@ async function openWishlist() {
   render();
 }
 
+
+// ------------------------------------------------------------------ account
+
+const ACCOUNT_EMPTY = { loggedIn: false, username: '', loans: [], fetchedAt: '', loading: false, error: '' };
+
+async function accountRequest(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', 'X-Client-Id': state.clientId, ...(options.headers || {}) },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.error || 'HTTP ' + response.status);
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+async function openAccount() {
+  if (state.controller) state.controller.abort();
+  state.view = 'account';
+  syncUrl();
+  render();
+  if (state.account.loggedIn) await refreshAccount();
+}
+
+async function refreshAccount() {
+  const account = state.account;
+  account.loading = true;
+  account.error = '';
+  render();
+  try {
+    const data = await accountRequest('/api/account/loans');
+    account.loggedIn = true;
+    account.username = data.username || account.username;
+    account.loans = data.items || [];
+    account.fetchedAt = data.fetchedAt || '';
+  } catch (error) {
+    if (error.status === 401) {
+      account.loggedIn = false;
+      account.loans = [];
+    }
+    account.error = error.message;
+  } finally {
+    account.loading = false;
+    render();
+  }
+}
+
+async function submitLogin(form) {
+  const username = form.elements.username.value.trim();
+  const password = form.elements.password.value;
+  const account = state.account;
+  account.loading = true;
+  account.error = '';
+  render();
+  try {
+    const data = await accountRequest('/api/account/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    });
+    account.loggedIn = true;
+    account.username = data.username || username;
+    account.loans = data.items || [];
+    account.fetchedAt = data.fetchedAt || '';
+    toast('Angemeldet — Ausleihen geladen');
+  } catch (error) {
+    account.error = error.message;
+  } finally {
+    account.loading = false;
+    render();
+  }
+}
+
+async function logoutAccount() {
+  try {
+    await accountRequest('/api/account/logout', { method: 'POST' });
+  } catch {
+    // The local session is dropped either way.
+  }
+  state.account = { ...ACCOUNT_EMPTY };
+  render();
+  toast('Abgemeldet');
+}
+
+async function renewLoan(button) {
+  button.disabled = true;
+  try {
+    const data = await accountRequest('/api/account/renew', {
+      method: 'POST',
+      body: JSON.stringify({ href: button.dataset.href }),
+    });
+    state.account.loans = data.items || [];
+    toast(data.message || 'Ausleihe verlängert');
+    render();
+  } catch (error) {
+    button.disabled = false;
+    toast('Verlängern fehlgeschlagen: ' + error.message);
+  }
+}
+
+function dueState(loan) {
+  if (!loan.dueISO) return { text: loan.due ? 'Fällig: ' + loan.due : 'Fälligkeit unbekannt', cls: '' };
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const due = new Date(loan.dueISO + 'T00:00:00');
+  const days = Math.round((due - today) / 86400000);
+  if (Number.isNaN(days)) return { text: 'Fällig: ' + loan.due, cls: '' };
+  if (days < 0) return { text: 'Überfällig seit ' + Math.abs(days) + (Math.abs(days) === 1 ? ' Tag' : ' Tagen'), cls: 'overdue' };
+  if (days === 0) return { text: 'Heute fällig', cls: 'due-soon' };
+  if (days <= 3) return { text: 'In ' + days + (days === 1 ? ' Tag' : ' Tagen') + ' fällig', cls: 'due-soon' };
+  return { text: 'Fällig am ' + loan.due, cls: '' };
+}
+
+function loanHtml(loan) {
+  const due = dueState(loan);
+  const renew = loan.renewHref
+    ? '<button type="button" class="btn-plain small" data-account-action="renew" data-href="' + esc(loan.renewHref) + '">Verlängern</button>'
+    : '';
+  const href = loan.recordHref ? 'https://katalog.ub.uni-leipzig.de' + loan.recordHref : '';
+  const title = href
+    ? '<a href="' + esc(href) + '" target="_blank" rel="noopener">' + esc(loan.title) + '</a>'
+    : esc(loan.title);
+
+  return '<article class="loan ' + due.cls + '">' +
+    '<div class="loan-main"><h2>' + title + '</h2>' +
+    (loan.author ? '<p class="loan-author">' + esc(loan.author) + '</p>' : '') +
+    '</div>' +
+    '<div class="loan-side"><span class="loan-due ' + due.cls + '">' + esc(due.text) + '</span>' + renew + '</div>' +
+    '</article>';
+}
+
+function renderAccount() {
+  const account = state.account;
+  els.facets.innerHTML = '';
+  els.more.hidden = true;
+
+  if (!account.loggedIn) {
+    els.resultbar.innerHTML = '<span class="bits"><span>Mein Konto</span></span>';
+    els.results.innerHTML =
+      '<section class="account-intro">' +
+      '<h1>Mein Konto</h1>' +
+      '<p>Melden Sie sich mit Ihrer Bibliotheksausweisnummer an, um Ihre ausgeliehenen Bücher zu sehen — mit Fristen und Verlängerung.</p>' +
+      '<form class="account-form" id="account-form" autocomplete="on">' +
+      '<label>Ausweisnummer<input name="username" type="text" autocomplete="username" inputmode="numeric" required /></label>' +
+      '<label>Passwort<input name="password" type="password" autocomplete="current-password" required /></label>' +
+      '<button type="submit" class="btn-primary"' + (account.loading ? ' disabled' : '') + '>' + (account.loading ? 'Anmelden …' : 'Anmelden') + '</button>' +
+      '</form>' +
+      (account.error ? '<p class="account-error" role="alert">' + esc(account.error) + '</p>' : '') +
+      '<p class="account-note">Die Zugangsdaten gehen nur an den Katalog und werden nicht gespeichert. Die Sitzung endet nach 30 Minuten Untätigkeit.</p>' +
+      '</section>';
+    return;
+  }
+
+  const loans = account.loans;
+  const action = account.loading ? ' disabled' : '';
+  els.resultbar.innerHTML =
+    '<span class="bits"><span><strong>' + loans.length + '</strong> ' + (loans.length === 1 ? 'Ausleihe' : 'Ausleihen') + '</span>' +
+    (account.username ? '<span class="account-user">' + esc(account.username) + '</span>' : '') + '</span>' +
+    '<span class="spacer"></span>' +
+    '<button type="button" class="btn-plain small" data-account-action="refresh"' + action + '>Aktualisieren</button>' +
+    '<button type="button" class="btn-plain small" data-account-action="logout">Abmelden</button>';
+
+  if (account.error) {
+    els.results.innerHTML = '<div class="state">' + esc(account.error) + '</div>';
+    return;
+  }
+  if (account.loading && !loans.length) {
+    els.results.innerHTML = '<div class="state">Ausleihen werden geladen …</div>';
+    return;
+  }
+  if (!loans.length) {
+    els.results.innerHTML = '<div class="state">Zurzeit ist nichts ausgeliehen.</div>';
+    return;
+  }
+
+  els.results.innerHTML = loans.map(loanHtml).join('');
+}
+
 // ------------------------------------------------------------------ search
 
 async function runSearch({ append = false } = {}) {
@@ -426,12 +608,14 @@ function visibleRecords() {
 
 function render() {
   if (state.view === 'wishlist') renderWishlist();
+  else if (state.view === 'account') renderAccount();
   else {
     renderBar();
     renderFacets();
     renderResults();
   }
   renderWishBadge();
+  els.accountToggle.setAttribute('aria-pressed', String(state.view === 'account'));
 }
 
 function renderWishBadge() {
@@ -835,6 +1019,15 @@ els.facets.addEventListener('click', (event) => {
 });
 
 els.results.addEventListener('click', (event) => {
+  const accountButton = event.target.closest('[data-account-action]');
+  if (accountButton) {
+    const action = accountButton.dataset.accountAction;
+    if (action === 'logout') logoutAccount();
+    else if (action === 'refresh') refreshAccount();
+    else if (action === 'renew') renewLoan(accountButton);
+    return;
+  }
+
   const wishButton = event.target.closest('[data-wish]');
   if (wishButton) {
     const record = state.byUid.get(wishButton.dataset.wish);
@@ -863,6 +1056,23 @@ els.dialog.addEventListener('click', async (event) => {
   if (!copyButton || !state.citeRecord) return;
   const text = copyButton.dataset.copy === 'bibtex' ? bibtexFor(state.citeRecord) : citationFor(state.citeRecord);
   if (await copyText(text)) toast(copyButton.dataset.copy === 'bibtex' ? 'BibTeX kopiert' : 'Zitat kopiert');
+});
+
+document.addEventListener('submit', (event) => {
+  if (event.target.id !== 'account-form') return;
+  event.preventDefault();
+  submitLogin(event.target);
+});
+
+els.accountToggle.addEventListener('click', () => {
+  if (state.view === 'account') {
+    state.view = 'search';
+    syncUrl();
+    render();
+    if (!state.records.length) showWelcome();
+  } else {
+    openAccount();
+  }
 });
 
 els.wishToggle.addEventListener('click', () => {

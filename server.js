@@ -32,6 +32,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createAccount } from './account.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -810,6 +811,15 @@ async function handleSearch(url, res) {
 // Server
 // ---------------------------------------------------------------------------
 
+// "Mein Konto" lives in its own module: the SRU index has no per-user data,
+// so it logs into the catalogue's VuFind account and parses the loans table.
+const account = createAccount({
+  catalogueBase: process.env.CATALOGUE_BASE || 'https://katalog.ub.uni-leipzig.de',
+  sendJson,
+  readJsonBody,
+  clientIdOf,
+});
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
@@ -857,6 +867,11 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       sendJson(res, 405, { error: 'Method not allowed' });
+      return;
+    }
+
+    if (url.pathname === '/api/account' || url.pathname.startsWith('/api/account/')) {
+      await account.handle(url, req, res);
       return;
     }
 
