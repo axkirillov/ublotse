@@ -1,0 +1,85 @@
+name: android
+
+# One key signs everything, so every build — a branch build for testing and a tagged release
+# alike — installs over the last one. The key is not in the tree: it is the ANDROID_KEYSTORE_BASE64
+# secret, and this workflow unpacks it into $RUNNER_TEMP, which is discarded with the runner.
+#
+# Deliberately no `pull_request` trigger: a workflow that signs with a key would otherwise hand
+# that key to any fork whose PR runs it, and to any PR that edits build.mjs.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+# Only the release step needs write, and it only runs on a v* tag; nothing else in this
+# workflow touches the repository.
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    name: build and test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install SDK pieces and zip
+        run: |
+          sdkmanager --install 'platforms;android-34' 'build-tools;34.0.0'
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zip sqlite3
+
+      - name: Unpack the signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not set; see README, Signing."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/signing"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/signing/ublotse.jks"
+
+      # run.mjs compiles the Java port, compares it against server.js, and builds the APK to do it,
+      # so it needs the same signing environment as the release step.
+      - name: Tests
+        env: &signing
+          UBLOTSE_KEYSTORE: ${{ runner.temp }}/signing/ublotse.jks
+          UBLOTSE_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          UBLOTSE_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+        run: node android/tests/run.mjs
+
+      - name: Build
+        env: *signing
+        run: node android/build.mjs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ublotse-apk
+          path: android/build/ublotse.apk
+          if-no-files-found: error
+
+      # The app updates itself from the release's ublotse.apk and compares the tag with its
+      # versionName, so the asset name and the tag both matter.
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::package.json says $version but the tag is $GITHUB_REF_NAME."
+            exit 1
+          fi
+          cp android/build/ublotse.apk ublotse.apk
+          gh release create "$GITHUB_REF_NAME" ublotse.apk \
+            --title "$GITHUB_REF_NAME" --generate-notes
