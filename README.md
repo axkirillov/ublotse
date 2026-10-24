@@ -246,6 +246,34 @@ Whole record snapshots, not just ids, so the list renders without re-querying SR
 deliberately mirrors what the Android client keeps in its own SQLite cache; the server is the
 sync point, not the source of truth.
 
+### Mein Konto
+
+The loans view cannot use SRU: the index holds no per-user data. It logs into the catalogue's
+VuFind account the way a browser does — `GET /MyResearch/Home` for the form and its `csrf`
+token, then a `POST` of `username`, `password`, `auth_method=ILS` and `processLogin` — and
+keeps the resulting cookies in memory, keyed by client id. Every request carries `finc_open=1`,
+the gate cookie the cover proxy also needs, and redirects are followed by hand so a
+`Set-Cookie` on the 302 is not lost. `GET /MyResearch/CheckedOut` is then parsed into JSON.
+
+Column names differ between VuFind versions, so the parser accepts German and English labels
+(`Fällig`, `Rückgabe`, `Due Date`, `Ausgeliehen`, `Borrowed`) and falls back to the first date
+in the row. `account.js` and `Account.java` are held to the same answers by fixtures taken
+from `account.js` itself — see the tests below.
+
+What is deliberately *not* kept:
+
+- the card number and password, which exist only inside the one login `POST`;
+- the loans, which are answered with `Cache-Control: no-store` and never written to SQLite;
+- the session, which ends after 30 idle minutes or on logout. On the device it is a `Map` in
+  the app's process, so it does not survive the process being killed, and it is keyed by the
+  same per-install id as the wishlist.
+
+`POST /api/account/renew` follows the link the loans page offered, but only after checking that
+it still points at the catalogue and inside `/MyResearch/` — dot segments included, because
+`java.net.URL` keeps `/MyResearch/../Search` verbatim where a browser has already collapsed it.
+That href comes out of an HTML page, so it is the one place where a response could steer the
+app somewhere else.
+
 ## The Android app
 
 The app is the same page, the same `server.js` logic and the same `/api/*` contract, compiled
@@ -315,8 +343,16 @@ across builds. And the updater compares `versionName`, so any build worth shippi
 the Java port against them: byte-identical CQL for ~600 query/index combinations, the same
 SRU parsing, the same JSON on the wire, the same facets, cover proxying against fake upstreams,
 the release payload and version comparison behind the in-app updater, the wishlist API and DDL
-(run for real through the `sqlite3` CLI), and the loopback server over raw sockets — including
-the `Expect: 100-continue` handshake Chromium uses for larger bodies.
+(run for real through the `sqlite3` CLI), the loans parser against `account.js` on eight fixture
+pages (German, English, header-less, entity-laden, several tables on one page, empty), the
+account routes driven end to end against a canned catalogue — csrf handshake, cookies surviving
+a redirect, session expiry, logout, a wrong card number, and the renew-link allow-list — and the
+loopback server over raw sockets, including the `Expect: 100-continue` handshake Chromium uses
+for larger bodies.
+
+The account routes are the one part that cannot be exercised against the real thing: that needs a
+library card. `Account.Transport` exists for exactly that reason, and the fake catalogue answers
+the same requests the ILS does.
 
 ## Roadmap
 
@@ -332,6 +368,7 @@ the `Expect: 100-continue` handshake Chromium uses for larger bodies.
 ```
 ublotse/
 ├── server.js        # zero-dep HTTP server: static files, /api/search, covers, wishlist
+├── account.js       # "Mein Konto": VuFind login, loans table parser
 ├── data/
 │   └── ublotse.db   # SQLite wishlist (created on first run, git-ignored)
 ├── public/          # the frontend — also copied verbatim into the APK's assets

@@ -46,7 +46,8 @@ public class MainActivity extends Activity {
             new SqliteWishlistStore(this));
 
     // The browser mints its own id and sends it in X-Client-Id; on the device that is ignored in
-    // favour of one id per install, so clearing the WebView's data cannot orphan the wishlist.
+    // favour of one id per install, so clearing the WebView's data cannot orphan the wishlist or
+    // drop the library session that "Mein Konto" is holding.
     final String installId = installId();
 
     LocalServer local =

@@ -170,6 +170,151 @@ const JSON_VALUES = [
 ];
 const json = JSON_VALUES.map((value) => ({ value, expected: JSON.stringify(value) }));
 
+// ---------------------------------------------------------------------------
+// "Mein Konto": the loan-table parser, fixture by fixture. The expected values come from
+// account.js itself, so the JVM port is measured against the code it was ported from rather than
+// against a retyped copy of what that code is believed to do.
+// ---------------------------------------------------------------------------
+
+const { parseLoans, germanToIso } = await import(pathToFileURL(join(ROOT, 'account.js')).href);
+
+const LOAN_PAGES = {
+  german: `
+    <div class="mainbody left">
+      <h1>Ausgeliehene Medien</h1>
+      <table class="table table-striped">
+        <thead>
+          <tr><th>Titel</th><th>Autor</th><th>Ausgeliehen</th><th>Fällig</th><th>Aktionen</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><a href="/Record/0-1610511743" class="title">Lolita: Roman</a></td>
+            <td>Nabokov, Vladimir</td>
+            <td>12.03.2025</td>
+            <td>02.04.2025</td>
+            <td><a class="btn renew" href="/MyResearch/Record/0-1610511743/Renew?csrf=abc&amp;back=%2FMyResearch%2FCheckedOut">Verlängern</a></td>
+          </tr>
+          <tr>
+            <td><a href="/Record/0-9999991">Der Zauberberg</a></td>
+            <td>Mann, Thomas</td>
+            <td>01.03.2025</td>
+            <td>22.03.2025</td>
+            <td>&nbsp;</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`,
+
+  english: `
+    <table class="table">
+      <tr><th>Title</th><th>Author</th><th>Borrowed</th><th>Due Date</th></tr>
+      <tr>
+        <td><a href="/Record/ai-49-MTAuMjMwNy85MTA4NTI">Progress and poverty</a></td>
+        <td>George, Henry</td>
+        <td>01.02.2025</td>
+        <td>22.02.2025</td>
+      </tr>
+    </table>`,
+
+  // No header row at all: the column lookup cannot work, so the first date is taken as the due
+  // date and the other as the borrowing date. Wrong, but agreed on by both parsers, and the page
+  // the catalogue serves today always has headers.
+  noHeader: `
+    <table>
+      <caption>Ausgeliehen</caption>
+      <tr>
+        <td><a href="/Record/0-3141592">Faust. Eine Tragödie</a></td>
+        <td>Goethe, Johann Wolfgang von</td>
+        <td>05.05.2025</td>
+        <td>26.05.2025</td>
+      </tr>
+    </table>`,
+
+  // No "checked out"/"fällig" words anywhere: the table is recognised by its record links.
+  recordFallback: `
+    <table class="list">
+      <tr><td><a href="/Record/0-42">Der Prozess</a></td><td>06.06.2025</td></tr>
+    </table>`,
+
+  // A summary table first, so that "the first table on the page" is not a shortcut that works.
+  severalTables: `
+    <table class="summary">
+      <tr><th>Konto</th><th>Status</th></tr>
+      <tr><td>1234567890</td><td>aktiv</td></tr>
+    </table>
+    <table class="loans">
+      <tr><th>Titel</th><th>Fällig</th></tr>
+      <tr><td><a href="/Record/0-7?a=1&amp;b=2">Solidarit&auml;t</a></td><td>2.8.2025</td></tr>
+    </table>`,
+
+  // Entities and inline markup: the limited entity table is part of the contract, so &bdquo; must
+  // survive literally while &auml; and &#x27; are decoded.
+  entities: `
+    <table>
+      <tr><th>Titel</th><th>Autor</th><th>Ausgeliehen</th><th>R&uuml;ckgabe</th></tr>
+      <tr>
+        <td><a href="/Record/0-8?x=1&amp;y=2">Der<br>Prozess &amp; O&#x27;Brien&nbsp;liest</a></td>
+        <td>M&uuml;ller&nbsp;Hans</td>
+        <td>01.07.2025</td>
+        <td>2.8.2025</td>
+      </tr>
+      <tr>
+        <td>Vormerkung: &bdquo;Faust&ldquo;</td>
+        <td></td>
+        <td></td>
+        <td>23.09.2025</td>
+      </tr>
+    </table>`,
+
+  // German renew wording in both spellings the catalogue has used, and a title cell that is not an
+  // anchor at all.
+  renewWording: `
+    <table>
+      <tr><th>Titel</th><th>Ausgeliehen seit</th><th>Fällig am</th></tr>
+      <tr>
+        <td><a href="/Record/0-11">Effi Briest</a></td>
+        <td>10.01.2025</td>
+        <td>31.01.2025</td>
+        <td><a href="/MyResearch/Record/0-11/Renew?method=verl&auml;ngern">Verlängern</a></td>
+      </tr>
+      <tr>
+        <td>Buddenbrooks</td>
+        <td>11.01.2025</td>
+        <td>01.02.2025</td>
+        <td><a href="/MyResearch/Record/0-12/Renew?method=verlaengern">Verlängern</a></td>
+      </tr>
+    </table>`,
+
+  empty: `
+    <div class="alert alert-info">Sie haben zurzeit nichts ausgeliehen.</div>,
+    <p>Keine Ausleihen.</p>`,
+};
+
+const dates = [
+  '12.03.2025',
+  '1.2.2025',
+  '3.4.2025',
+  '12.3.2025 um 10 Uhr',
+  '31.12.1999',
+  '0.0.0000',
+  '05.05.2025 12.03.2026',
+  'keine Frist',
+  '',
+];
+
+const account = {
+  pages: Object.entries(LOAN_PAGES).map(([name, html]) => ({
+    name,
+    html,
+    expected: parseLoans(html),
+  })),
+  dates: dates.map((value) => ({ value, expected: germanToIso(value) })),
+};
+
+console.log(
+  `  account fixtures  ${account.pages.length} pages, ${account.pages.reduce((sum, page) => sum + page.expected.length, 0)} loans`,
+);
+
 process.stdout.write('  sru fixture  ');
 const fixtureCql = server.buildCql({ index: 'serverChoice', q: 'Lolita Nabokov' });
 const fixtureUrl =
@@ -237,6 +382,7 @@ writeFileSync(
     cql,
     keys,
     json,
+    account,
     sru: {
       xml: fixtureXml,
       total: fixture.total,

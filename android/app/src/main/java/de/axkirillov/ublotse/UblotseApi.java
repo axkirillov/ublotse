@@ -29,13 +29,19 @@ public class UblotseApi {
   private final Sru sru;
   private final Covers covers;
   private final WishlistStore wishlist;
+  private final Account account;
   private final TtlCache<Map<String, Object>> searchCache =
       new TtlCache<>(CACHE_MAX_ENTRIES, CACHE_TTL_MS);
 
   public UblotseApi(Sru sru, Covers covers, WishlistStore wishlist) {
+    this(sru, covers, wishlist, new Account());
+  }
+
+  public UblotseApi(Sru sru, Covers covers, WishlistStore wishlist, Account account) {
     this.sru = sru;
     this.covers = covers;
     this.wishlist = wishlist;
+    this.account = account;
   }
 
   /**
@@ -67,6 +73,11 @@ public class UblotseApi {
       if (path.startsWith("/api/wishlist/")) {
         if (!"DELETE".equals(method)) return methodNotAllowed();
         return wishlistRemove(clientId, path.substring("/api/wishlist/".length()));
+      }
+      // "Mein Konto" is its own module: the SRU index has no per-user data, so it logs into the
+      // catalogue's VuFind account instead of the search index.
+      if ("/api/account".equals(path) || path.startsWith("/api/account/")) {
+        return account.handle(method, path, body, clientId);
       }
       if ("/api/health".equals(path)) {
         return WebResponse.json(

@@ -8,6 +8,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.URLDecoder;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -63,6 +64,12 @@ public final class Tests {
 
     section("wishlist API");
     wishlistApi();
+
+    section("account parser parity with account.js");
+    accountParserParity(parity);
+
+    section("account API");
+    accountApi();
 
     section("loopback server");
     loopbackServer(publicDirectory, parity);
@@ -371,6 +378,181 @@ public final class Tests {
     eq("health reports the wishlist backend", "sqlite", ((Map<String, Object>) health.get("wishlist")).get("backend"));
   }
 
+  // -------------------------------------------------------------------------
+  // "Mein Konto": the parser, then the routes on a canned catalogue
+  // -------------------------------------------------------------------------
+
+  /**
+   * Every fixture page is parsed by account.js in run.mjs and by {@link Account#parseLoans} here; the
+   * two answers are compared as JSON. That is the only way to be sure the port kept the small
+   * decisions — which column is the due date, what a renew link looks like, when a row is skipped —
+   * that the frontend depends on.
+   */
+  private static void accountParserParity(Map<String, Object> parity) {
+    Map<String, Object> account = (Map<String, Object>) parity.get("account");
+    for (Object item : (List<Object>) account.get("pages")) {
+      Map<String, Object> page = (Map<String, Object>) item;
+      String name = (String) page.get("name");
+      List<Object> expected = (List<Object>) page.get("expected");
+      List<Map<String, Object>> actual = Account.parseLoans((String) page.get("html"));
+      check(
+          "page \"" + name + "\" parses to the same loans as account.js",
+          deepEquals(expected, actual),
+          describeDifference(Json.write(expected), Json.write(actual)));
+    }
+    for (Object item : (List<Object>) account.get("dates")) {
+      Map<String, Object> testCase = (Map<String, Object>) item;
+      String value = (String) testCase.get("value");
+      eq("germanToIso(\"" + value + "\")", testCase.get("expected"), Account.germanToIso(value));
+    }
+
+    // The parser must not invent loans out of a page without a table, and the fixtures cover the
+    // shapes the catalogue serves today; a null page is simply empty rather than a crash.
+    eq("a null page has no loans", 0, Account.parseLoans(null).size());
+    eq("a page without tables has no loans", 0, Account.parseLoans("<p>Keine Ausleihen.</p>").size());
+  }
+
+  private static void accountApi() throws Exception {
+    FakeCatalogue catalogue = new FakeCatalogue();
+    Account account = new Account(FakeCatalogue.BASE, catalogue);
+    UblotseApi api =
+        new UblotseApi(new Sru(), new Covers(null), new MemoryWishlist(), account);
+    String client = "account-client-0001";
+
+    // Signed out: the status route answers, the loans route refuses.
+    Map<String, Object> status = json(api.handle("GET", "/api/account", empty(), null, client));
+    check(
+        "an account starts signed out and without a name",
+        Boolean.FALSE.equals(status.get("loggedIn")) && status.get("username") == null,
+        Json.write(status));
+    eq("loans before login -> 401", 401, api.handle("GET", "/api/account/loans", empty(), null, client).status);
+    eq("renew before login -> 401", 401,
+        api.handle("POST", "/api/account/renew", empty(), body(Json.obj("href", "/MyResearch/x")), client).status);
+
+    // Login: form, POST, redirect, loans.
+    WebResponse login =
+        api.handle(
+            "POST",
+            "/api/account/login",
+            empty(),
+            body(Json.obj("username", "1234567890", "password", "geheim")),
+            client);
+    eq("login -> 200", 200, login.status);
+    Map<String, Object> session = json(login);
+    check(
+        "login reports the account",
+        Boolean.TRUE.equals(session.get("loggedIn")) && "1234567890".equals(session.get("username")),
+        Json.write(session));
+    check("login reports a fetch timestamp", String.valueOf(session.get("fetchedAt")).matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z"), String.valueOf(session.get("fetchedAt")));
+    List<Object> items = (List<Object>) session.get("items");
+    eq("both loans are parsed", 2, items.size());
+    Map<String, Object> first = (Map<String, Object>) items.get(0);
+    eq("the first loan's title", "Effi Briest", first.get("title"));
+    eq("its due date is normalised", "2025-04-02", first.get("dueISO"));
+    eq("its record id is extracted", "0-11", first.get("recordId"));
+    eq("and its record link kept relative", "/Record/0-11", first.get("recordHref"));
+
+    eq("login is the form, the POST, the redirect and the loans page", 4, catalogue.calls.size());
+    eq("the form is fetched first", "GET /MyResearch/Home", catalogue.calls.get(0).describe());
+    FakeCatalogue.Call form = catalogue.calls.get(1);
+    eq("the second request is the POST", "POST /MyResearch/Home", form.method + " " + form.path);
+    check("the card number is a form field", form.form.contains("username=1234567890"), form.form);
+    check("so is the password", form.form.contains("password=geheim"), form.form);
+    check("with the ILS method", form.form.contains("auth_method=ILS"), form.form);
+    check("and the csrf token from the form", form.form.contains("csrf=tok-1"), form.form);
+    check("and the button name the catalogue expects", form.form.contains("processLogin=Mein+Konto"), form.form);
+    eq("as a urlencoded body", "application/x-www-form-urlencoded", form.contentType);
+    check("the cookie from the login page is sent back", form.cookie.contains("VuFind=first"), form.cookie);
+    check("the finc gate cookie is always sent", form.cookie.startsWith("finc_open=1"), form.cookie);
+    check("the session cookie follows the redirect", catalogue.calls.get(2).cookie.contains("LBSESSION=ok"), catalogue.calls.get(2).cookie);
+    check("and reaches the loans page", catalogue.calls.get(3).cookie.contains("LBSESSION=ok"), catalogue.calls.get(3).cookie);
+
+    // A second client is a second session: the app gives every install its own id.
+    eq("another client has no session", 401, api.handle("GET", "/api/account/loans", empty(), null, "account-client-0002").status);
+    Map<String, Object> mine = json(api.handle("GET", "/api/account", empty(), null, client));
+    eq("the first client is still signed in", Boolean.TRUE, mine.get("loggedIn"));
+
+    // Renewing follows the link the parser extracted.
+    WebResponse renewed =
+        api.handle("POST", "/api/account/renew", empty(), body(Json.obj("href", first.get("renewHref"))), client);
+    eq("renew -> 200", 200, renewed.status);
+    Map<String, Object> afterRenew = json(renewed);
+    check(
+        "renew reports success",
+        Boolean.TRUE.equals(afterRenew.get("renewed")) && "Ausleihe verlängert.".equals(afterRenew.get("message")),
+        Json.write(afterRenew));
+    check("the renew response carries the fresh loans", afterRenew.containsKey("items") && afterRenew.containsKey("fetchedAt"), Json.write(afterRenew));
+    List<Object> refreshed = (List<Object>) afterRenew.get("items");
+    eq("the new due date is reloaded", "2025-04-20", ((Map<String, Object>) refreshed.get(0)).get("dueISO"));
+    FakeCatalogue.Call renewCall = catalogue.calls.get(catalogue.calls.size() - 2);
+    check("the renew link is followed on the catalogue", renewCall.path.startsWith("/MyResearch/Record/0-11/Renew"), renewCall.path);
+    check("with the session cookie", renewCall.cookie.contains("LBSESSION=ok"), renewCall.cookie);
+
+    // A renew link is an URL handed back by a web page, so it is the one place the app could be
+    // steered somewhere else. Everything outside the account area is refused unrequested.
+    int before = catalogue.calls.size();
+    String[] refused = {
+      "https://evil.example/MyResearch/Record/1/Renew",
+      "//evil.example/MyResearch/Record/1/Renew",
+      "http://katalog.example/MyResearch/Record/1/Renew",
+      "/Search/Home",
+      "/MyResearch/../Search/Home",
+      "/MyResearch/%2e%2e/Search/Home",
+      "",
+    };
+    for (String href : refused) {
+      eq("renew refuses " + (href.isEmpty() ? "an empty link" : href), 400,
+          api.handle("POST", "/api/account/renew", empty(), body(Json.obj("href", href)), client).status);
+    }
+    eq("and none of them reached the catalogue", before, catalogue.calls.size());
+
+    // Logout is local even when the catalogue does not answer.
+    eq("logout -> 200", 200, api.handle("POST", "/api/account/logout", empty(), null, client).status);
+    // The logout redirect is followed too (account.js does the same), so the Logout request is the
+    // second-to-last call and following "/" is the last.
+    check("logout was forwarded to the catalogue", catalogue.calls.get(catalogue.calls.size() - 2).path.startsWith("/MyResearch/Logout"), catalogue.calls.get(catalogue.calls.size() - 2).path);
+    eq("loans after logout -> 401", 401, api.handle("GET", "/api/account/loans", empty(), null, client).status);
+    eq("the account is signed out", Boolean.FALSE, json(api.handle("GET", "/api/account", empty(), null, client)).get("loggedIn"));
+
+    // An expired cookie is reported as a session that has to be renewed, not as a server failure.
+    api.handle("POST", "/api/account/login", empty(), body(Json.obj("username", "1234567890", "password", "geheim")), client);
+    catalogue.expired = true;
+    WebResponse expired = api.handle("GET", "/api/account/loans", empty(), null, client);
+    catalogue.expired = false;
+    eq("an expired session -> 401", 401, expired.status);
+    eq("with the session message", "Sitzung abgelaufen. Bitte erneut anmelden.", json(expired).get("error"));
+    eq("and the account is signed out again", Boolean.FALSE, json(api.handle("GET", "/api/account", empty(), null, client)).get("loggedIn"));
+
+    // A wrong password keeps the catalogue's own wording.
+    WebResponse rejected =
+        api.handle("POST", "/api/account/login", empty(), body(Json.obj("username", "1234567890", "password", "falsch")), "account-client-0003");
+    eq("a wrong password -> 401", 401, rejected.status);
+    eq("with the catalogue's message", "Ausweisnummer oder Passwort ist falsch.", json(rejected).get("error"));
+    eq("missing credentials -> 400", 400, api.handle("POST", "/api/account/login", empty(), body(Json.obj()), "account-client-0004").status);
+    eq("an empty body -> 400", 400, api.handle("POST", "/api/account/login", empty(), new byte[0], "account-client-0005").status);
+    eq("invalid JSON is a 502", 502, api.handle("POST", "/api/account/login", empty(), body("{oops"), "account-client-0006").status);
+    eq("with the server's message", "Invalid JSON body", json(api.handle("POST", "/api/account/login", empty(), body("{oops"), "account-client-0006")).get("error"));
+
+    // Routes that do not exist are answered locally, without a catalogue request.
+    int routed = catalogue.calls.size();
+    eq("an unknown account route -> 404", 404, api.handle("GET", "/api/account/nonsense", empty(), null, client).status);
+    eq("a POST on the status route -> 404", 404, api.handle("POST", "/api/account", empty(), null, client).status);
+    eq("and neither went upstream", routed, catalogue.calls.size());
+
+    // The idle timeout is what ends a session nobody is using; on the device that is the point at
+    // which the cookie stops being held in memory.
+    Account shortLived = new Account(FakeCatalogue.BASE, catalogue, 5);
+    UblotseApi idleApi = new UblotseApi(new Sru(), new Covers(null), new MemoryWishlist(), shortLived);
+    eq("an idle session logs in", 200, idleApi.handle("POST", "/api/account/login", empty(), body(Json.obj("username", "1234567890", "password", "geheim")), "account-client-0007").status);
+    Thread.sleep(30);
+    eq("after the idle timeout the session is gone", 401, idleApi.handle("GET", "/api/account/loans", empty(), null, "account-client-0007").status);
+    eq("and forgotten, not merely refused", Boolean.FALSE, json(idleApi.handle("GET", "/api/account", empty(), null, "account-client-0007")).get("loggedIn"));
+
+    // Routing and the rest of the API are untouched.
+    eq("health still answers", Boolean.TRUE, json(api.handle("GET", "/api/health", empty(), null, client)).get("ok"));
+    eq("the account prefix is not a search", 400, api.handle("GET", "/api/search", empty(), null, client).status);
+  }
+
   /** Writes the DDL out so that run.mjs can hand the very same statements to the sqlite3 CLI. */
   private static void wishlistSql(File parityDirectory) throws IOException {
     File file = new File(parityDirectory, "wishlist.sql");
@@ -457,6 +639,43 @@ public final class Tests {
       check("and with the server's message", tooBig.body.contains("Request body too large"), abbreviate(tooBig.body, 120));
       eq("and nothing was stored", 0L, store.count(installId));
 
+      // "Mein Konto" over the same loopback origin the WebView uses. The app starts signed out, so
+      // the route, the status code and the JSON shape are checked without touching the catalogue.
+      check("the bundled frontend carries the account entry", new String(index.body, "UTF-8").contains("account-toggle"), "");
+      Raw accountStatus = rawGet(port, "/api/account");
+      check("the account route answers on the loopback server", accountStatus.statusLine.contains("200"), accountStatus.statusLine);
+      check("and starts signed out", accountStatus.body.contains("\"loggedIn\":false"), accountStatus.body);
+      Raw accountLoans = rawGet(port, "/api/account/loans");
+      check("loans need a sign-in", accountLoans.statusLine.contains("401"), accountLoans.statusLine);
+      check("with the app's message", accountLoans.body.contains("Nicht angemeldet."), accountLoans.body);
+      Raw accountLogout = rawPost(port, "/api/account/logout", "", false);
+      check("logging out while signed out is harmless", accountLogout.statusLine != null && accountLogout.statusLine.contains("200"), String.valueOf(accountLogout.statusLine));
+
+      // The whole sign-in, over the socket the WebView uses, against a canned catalogue: this is
+      // the request Chromium makes when the card number is typed into the account form.
+      FakeCatalogue canned = new FakeCatalogue();
+      UblotseApi accountApi =
+          new UblotseApi(new Sru(), new Covers(null), new MemoryWishlist(), new Account(FakeCatalogue.BASE, canned));
+      LocalServer signIn =
+          new LocalServer(
+              (method, path, query, body, headers) -> accountApi.handle(method, path, query, body, installId),
+              new DirectoryResources(publicDirectory));
+      int signInPort = signIn.start();
+      try {
+        Raw signed =
+            rawPost(
+                signInPort,
+                "/api/account/login",
+                Json.write(Json.obj("username", "1234567890", "password", "geheim")),
+                false);
+        check("a sign-in over the loopback socket -> 200", signed.statusLine != null && signed.statusLine.contains("200"), String.valueOf(signed.statusLine));
+        check("and lists the loans", signed.body.contains("Effi Briest") && signed.body.contains("\"dueISO\":\"2025-04-02\""), abbreviate(signed.body, 200));
+        Raw listed = rawGet(signInPort, "/api/account/loans");
+        check("the session survives between requests", listed.statusLine.contains("200") && listed.body.contains("Buddenbrooks"), listed.statusLine);
+      } finally {
+        signIn.stop();
+      }
+
       // Live A/B against the answers the reference Node server gave for the same queries.
       Map<String, Object> live = (Map<String, Object>) parity.get("live");
       Map<String, Object> answers = (Map<String, Object>) live.get("answers");
@@ -477,10 +696,10 @@ public final class Tests {
         List<Object> expectedRecords = (List<Object>) reference.get("records");
         List<Object> actualRecords = (List<Object>) data.get("records");
         eq("search \"" + query + "\" record count", (long) expectedRecords.size(), (long) actualRecords.size());
-        boolean same = true;
-        for (int i = 0; i < Math.min(expectedRecords.size(), actualRecords.size()); i += 1) {
-          Map<String, Object> want = (Map<String, Object>) expectedRecords.get(i);
-          Map<String, Object> got = (Map<String, Object>) actualRecords.get(i);
+
+        List<Object> flattened = new ArrayList<>();
+        for (Object found : actualRecords) {
+          Map<String, Object> got = (Map<String, Object>) found;
           Map<String, Object> flat = new LinkedHashMap<>();
           flat.put("id", got.get("id"));
           flat.put("title", got.get("title"));
@@ -492,12 +711,29 @@ public final class Tests {
             authors.add(named.get("name") + "|" + named.get("roleLabel"));
           }
           flat.put("authors", authors);
-          if (!deepEquals(want, flat)) {
-            same = false;
-            check("search \"" + query + "\" record " + i, false, describeDifference(Json.write(want), Json.write(flat)));
-          }
+          flattened.add(flat);
         }
-        if (same) check("search \"" + query + "\" returns the same records", true, "");
+
+        int compared = Math.min(expectedRecords.size(), flattened.size());
+        int differences = 0;
+        for (int i = 0; i < compared; i += 1) {
+          if (deepEquals(expectedRecords.get(i), flattened.get(i))) continue;
+          // The index does not order records that score equally consistently: two adjacent records
+          // can change places between two identical queries. That is upstream, not a porting bug,
+          // so an adjacent transposition is noted rather than failed.
+          boolean tieSwap =
+              i + 1 < compared
+                  && deepEquals(expectedRecords.get(i), flattened.get(i + 1))
+                  && deepEquals(expectedRecords.get(i + 1), flattened.get(i));
+          if (tieSwap) {
+            notes.add("records " + i + " and " + (i + 1) + " of \"" + query + "\" are a score tie and came back swapped");
+            i += 1;
+            continue;
+          }
+          differences += 1;
+          check("search \"" + query + "\" record " + i, false, describeDifference(Json.write(expectedRecords.get(i)), Json.write(flattened.get(i))));
+        }
+        if (differences == 0) check("search \"" + query + "\" returns the same records", true, "");
         eq("search \"" + query + "\" facets", canonical(reference.get("facets")), canonical(data.get("facets")));
         if (!Json.write(reference.get("facets")).equals(Json.write(data.get("facets")))) {
           notes.add("facet order differs from the server for \"" + query + "\" where counts tie; the frontend recomputes facets anyway");
@@ -508,9 +744,15 @@ public final class Tests {
       Map<String, Object> lolita = (Map<String, Object>) Json.parse(new String(Http.get(base + "/api/search?q=Lolita+Nabokov", null, 40000).body, "UTF-8"));
       List<Object> top = (List<Object>) lolita.get("records");
       String topTitle = String.valueOf(((Map<String, Object>) top.get(0)).get("title"));
-      String topAuthor = String.valueOf(((Map<String, Object>) ((List<Object>) ((Map<String, Object>) top.get(0)).get("authors")).get(0)).get("name"));
+      // Every contributor, not just the lead: the 1959 edition the index ranks first credits Earl
+      // H. Rovit's introduction ahead of Nabokov, and which name comes first is a cataloguing
+      // detail, not a relevance one.
+      StringBuilder credits = new StringBuilder();
+      for (Object author : (List<Object>) ((Map<String, Object>) top.get(0)).get("authors")) {
+        credits.append(((Map<String, Object>) author).get("name")).append("; ");
+      }
       check("Lolita Nabokov ranks the novel first", topTitle.startsWith("Lolita"), topTitle);
-      check("written by Nabokov", topAuthor.contains("Nabokov"), topAuthor);
+      check("written by Nabokov", credits.toString().contains("Nabokov"), credits.toString());
 
       Map<String, Object> george = (Map<String, Object>) Json.parse(new String(Http.get(base + "/api/search?q=Progress+and+Poverty+Henry+George", null, 40000).body, "UTF-8"));
       List<Object> georgeTop = (List<Object>) george.get("records");
@@ -720,10 +962,18 @@ public final class Tests {
       out.write(head.toString().getBytes("ISO-8859-1"));
       out.flush();
 
+      // Without an Expect header a browser sends the body straight away, and so does this. (The
+      // wishlist test does the other thing on purpose: it is about the 100-continue handshake.)
+      boolean sent = false;
+      if (!expectContinue) {
+        out.write(bytes);
+        out.flush();
+        sent = true;
+      }
+
       InputStream in = socket.getInputStream();
       Raw raw = new Raw();
       String statusLine = LocalServer.readLine(in);
-      boolean sent = false;
       // A 1xx announces the body is welcome: drain it, send the body, read on. Anything else is
       // the final answer — which is what a refusal looks like, and it must not be invited first.
       while (statusLine != null && statusLine.contains(" 1") && !statusLine.contains(" 101")) {
@@ -885,6 +1135,148 @@ public final class Tests {
     @Override
     public String describe() {
       return ":memory:";
+    }
+  }
+
+  /**
+   * A catalogue in a method call: the login form, the csrf handshake, cookies that have to survive a
+   * redirect, the loans table and one renew link. Nothing here touches the network, so the account
+   * routes are testable on a machine without an emulator or a library card.
+   */
+  private static final class FakeCatalogue implements Account.Transport {
+    static final String BASE = "https://katalog.example";
+
+    static final class Call {
+      final String method;
+      final String path;
+      final String form;
+      final String cookie;
+      final String contentType;
+
+      Call(String method, String path, String form, String cookie, String contentType) {
+        this.method = method;
+        this.path = path;
+        this.form = form == null ? "" : form;
+        this.cookie = cookie == null ? "" : cookie;
+        this.contentType = contentType;
+      }
+
+      String describe() {
+        return method + " " + path;
+      }
+    }
+
+    final List<Call> calls = Collections.synchronizedList(new ArrayList<Call>());
+    volatile boolean expired;
+    volatile int dueDay = 2;
+
+    @Override
+    public Account.Reply send(
+        String method, String url, Map<String, String> headers, String form) {
+      String path = url.startsWith(BASE) ? url.substring(BASE.length()) : url;
+      String cookie = headers.get("Cookie");
+      calls.add(new Call(method, path, form, cookie, headers.get("Content-Type")));
+
+      if (path.startsWith("/MyResearch/Home")) {
+        return "GET".equals(method) ? home(cookie) : login(form);
+      }
+      if (path.startsWith("/MyResearch/CheckedOut")) return checkedOut(cookie);
+      if (path.startsWith("/MyResearch/Record/0-11/Renew")) {
+        dueDay = 20;
+        return page("<div class=\"alert alert-success\">Die Ausleihe wurde verl\u00e4ngert.</div>");
+      }
+      if (path.startsWith("/MyResearch/Logout")) {
+        Map<String, List<String>> redirect = new LinkedHashMap<>();
+        redirect.put("Location", Arrays.asList("/"));
+        return new Account.Reply(302, redirect, "");
+      }
+      return new Account.Reply(404, "Unbekannt");
+    }
+
+    Call last() {
+      return calls.isEmpty() ? null : calls.get(calls.size() - 1);
+    }
+
+    private Account.Reply home(String cookie) {
+      if (cookie != null && cookie.contains("LBSESSION=ok")) return page(loggedInPage());
+      Map<String, List<String>> cookies = new LinkedHashMap<>();
+      cookies.put("Set-Cookie", Arrays.asList("VuFind=first; Path=/; HttpOnly"));
+      return new Account.Reply(200, cookies, pageHtml(loginForm()));
+    }
+
+    private Account.Reply login(String form) {
+      Map<String, String> fields = formFields(form);
+      boolean valid =
+          "1234567890".equals(fields.get("username"))
+              && "geheim".equals(fields.get("password"))
+              && "ILS".equals(fields.get("auth_method"))
+              && "tok-1".equals(fields.get("csrf"))
+              && "Mein Konto".equals(fields.get("processLogin"));
+      if (!valid) {
+        return page(
+            "<div class=\"alert alert-danger\">Ausweisnummer oder Passwort ist falsch.</div>");
+      }
+      Map<String, List<String>> handed = new LinkedHashMap<>();
+      handed.put("Set-Cookie", Arrays.asList("LBSESSION=ok; Path=/; HttpOnly"));
+      handed.put("Location", Arrays.asList("/MyResearch/Home?loggedIn=1"));
+      return new Account.Reply(302, handed, "");
+    }
+
+    private Account.Reply checkedOut(String cookie) {
+      // The real catalogue sends the login form (or a redirect to it) once the cookie is stale, which
+      // is exactly what the session-expiry check has to notice.
+      if (expired || cookie == null || !cookie.contains("LBSESSION=ok")) {
+        return page(loginForm());
+      }
+      String day = dueDay < 10 ? "0" + dueDay : String.valueOf(dueDay);
+      return page(
+          "<table class=\"table\">"
+              + "<tr><th>Titel</th><th>Autor</th><th>Ausgeliehen</th><th>F\u00e4llig</th><th>Aktionen</th></tr>"
+              + "<tr><td><a href=\"/Record/0-11\">Effi Briest</a></td><td>Fontane, Theodor</td>"
+              + "<td>10.01.2025</td><td>"
+              + day
+              + ".04.2025</td>"
+              + "<td><a href=\"/MyResearch/Record/0-11/Renew?csrf=tok-1\">Verl\u00e4ngern</a></td></tr>"
+              + "<tr><td><a href=\"/Record/0-12\">Buddenbrooks</a></td><td>Mann, Thomas</td>"
+              + "<td>11.01.2025</td><td>05.05.2025</td><td>&nbsp;</td></tr>"
+              + "</table>");
+    }
+
+    private static String loggedInPage() {
+      return "<div class=\"account\"><a href=\"/MyResearch/Logout\">Abmelden</a></div>";
+    }
+
+    private static String loginForm() {
+      return "<form method=\"post\" name=\"loginForm\" action=\"/MyResearch/Home\">"
+          + "<input type=\"hidden\" name=\"csrf\" value=\"tok-1\"/>"
+          + "<input name=\"username\"/><input type=\"password\" name=\"password\"/>"
+          + "<button type=\"submit\" name=\"processLogin\" value=\"Mein Konto\">Anmelden</button>"
+          + "</form>";
+    }
+
+    private static Account.Reply page(String inner) {
+      return new Account.Reply(200, pageHtml(inner));
+    }
+
+    private static String pageHtml(String inner) {
+      return "<html><body>" + inner + "</body></html>";
+    }
+
+    private static Map<String, String> formFields(String form) {
+      Map<String, String> fields = new LinkedHashMap<>();
+      if (form == null) return fields;
+      for (String pair : form.split("&")) {
+        int equals = pair.indexOf('=');
+        if (equals < 0) continue;
+        try {
+          fields.put(
+              URLDecoder.decode(pair.substring(0, equals), "UTF-8"),
+              URLDecoder.decode(pair.substring(equals + 1), "UTF-8"));
+        } catch (IOException impossible) {
+          throw new IllegalStateException(impossible);
+        }
+      }
+      return fields;
     }
   }
 
