@@ -24,9 +24,20 @@ const JAVA_DIR = join(APP, 'src/main/java');
 const ASSETS_DIR = join(APP, 'src/main/assets');
 const PUBLIC_SRC = join(ROOT, 'public');
 const BUILD = join(HERE, 'build');
-const KEYSTORE = join(HERE, 'debug.keystore');
+// The signing key is never in the tree. One key signs every build — CI releases and local test
+// builds alike — because Android only replaces an install with an APK carrying the same key. It
+// lives in the repository's GitHub secrets (see .github/workflows/android.yml) and in whatever
+// local file UBLOTSE_KEYSTORE points at.
+const KEYSTORE = process.env.UBLOTSE_KEYSTORE
+  ? resolve(process.env.UBLOTSE_KEYSTORE)
+  : join(HERE, 'debug.keystore');
+const KEYSTORE_PASS = process.env.UBLOTSE_KEYSTORE_PASS || 'android';
+const KEYSTORE_ALIAS = process.env.UBLOTSE_KEYSTORE_ALIAS || 'androiddebugkey';
 
 const MIN_SDK = 24;
+// SHA-256 of the app's signing certificate. Every build must carry it, so that the in-app
+// updater and adb install -r replace existing installs instead of colliding with them.
+const EXPECTED_CERT_SHA256 = 'fa24fabdd60272845872dcea5871a9ec2eaa9b9fd6f5d054b2148951405e91c0';
 const TARGET_SDK = 34; // 34 on purpose: 35 would make edge-to-edge mandatory
 
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
@@ -142,6 +153,15 @@ function run(command, args, options = {}) {
   if (result.status !== 0) fail(`Command failed (${result.status}): ${shown}`);
 }
 
+/** Run a tool and collect its output, for checks that need to read it. */
+function capture(command, args) {
+  const shown = [command.replace(ROOT + '/', ''), ...args].join(' ');
+  if (process.env.VERBOSE) console.log(`  $ ${shown}`);
+  const result = spawnSync(command, args, { encoding: 'utf8', env: ENVIRONMENT });
+  if (result.status !== 0) fail(`Command failed (${result.status}): ${shown}\n${result.stderr || ''}`);
+  return `${result.stdout || ''}${result.stderr || ''}`;
+}
+
 function walk(directory, extension) {
   const found = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -249,22 +269,29 @@ const aligned = join(BUILD, 'aligned.apk');
 run(tool('zipalign'), ['-f', '4', unsigned, aligned]);
 console.log('ok');
 
-// A release needs a signature. This is a locally generated, self-signed key: good enough to
-// install, explicitly not a Play Store identity. It is gitignored, so every builder has their own.
+// Android only lets an install be replaced by a build carrying the same key, so there is exactly
+// one key for this app: the one in the repository's secrets. Nobody should be generating a new
+// one here — a fresh key orphans every existing install. The only reason this branch exists is
+// so a first-time build on a machine without the secret still produces something installable,
+// and it says loudly that it did.
 if (!existsSync(KEYSTORE)) {
   process.stdout.write('  keystore       ');
   run(javaTool('keytool'), [
     '-genkeypair',
     '-keystore', KEYSTORE,
-    '-alias', 'androiddebugkey',
-    '-storepass', 'android',
-    '-keypass', 'android',
+    '-alias', KEYSTORE_ALIAS,
+    '-storepass', KEYSTORE_PASS,
+    '-keypass', KEYSTORE_PASS,
     '-keyalg', 'RSA',
     '-keysize', '2048',
     '-validity', '10000',
     '-dname', 'CN=UBLotse, OU=prototype, O=UBLotse, C=DE',
   ]);
-  console.log('generated debug.keystore');
+  console.log('generated a throwaway key at ' + KEYSTORE);
+  console.log(
+    '  note: this is NOT the app\'s signing key. The APK will not install over an existing\n' +
+      '        build. Point UBLOTSE_KEYSTORE at the real one (see README) to build an upgrade.',
+  );
 }
 
 process.stdout.write('  apksigner      ');
@@ -272,9 +299,9 @@ const output = join(BUILD, 'ublotse.apk');
 run(tool('apksigner'), [
   'sign',
   '--ks', KEYSTORE,
-  '--ks-pass', 'pass:android',
-  '--key-pass', 'pass:android',
-  '--ks-key-alias', 'androiddebugkey',
+  '--ks-pass', `pass:${KEYSTORE_PASS}`,
+  '--key-pass', `pass:${KEYSTORE_PASS}`,
+  '--ks-key-alias', KEYSTORE_ALIAS,
   '--min-sdk-version', String(MIN_SDK),
   '--out', output,
   aligned,
@@ -282,8 +309,17 @@ run(tool('apksigner'), [
 console.log('ok');
 
 process.stdout.write('  verify         ');
-run(tool('apksigner'), ['verify', '--print-certs', output]);
-console.log('');
+const verified = capture(tool('apksigner'), ['verify', '--print-certs', output]);
+const digest = (/Signer #1 certificate SHA-256 digest: ([0-9a-f]+)/.exec(verified) || [])[1] || '';
+console.log(`ok   cert ${digest.slice(0, 16)}…`);
+
+if (digest && digest.toLowerCase() !== EXPECTED_CERT_SHA256) {
+  console.log(
+    `  warn  signed with ${digest.slice(0, 16)}…, not the committed key ` +
+      `(${EXPECTED_CERT_SHA256.slice(0, 16)}…).\n` +
+      '        This APK will not install over an existing one; uninstall first.\n',
+  );
+}
 
 const size = statSync(output).size;
 console.log(`  apk  ${relative(ROOT, output)}  ${(size / 1024).toFixed(0)} kB\n`);

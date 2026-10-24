@@ -312,9 +312,53 @@ adb install -r android/build/ublotse.apk
 Requirements: a JDK 17+ (`javac`, `keytool`), the Android SDK with `build-tools` and one
 platform (`ANDROID_HOME` is honoured), and `/usr/bin/zip`. `minSdk 24`, `targetSdk 34`.
 
-The build signs with `android/debug.keystore`, generated on first run and git-ignored. It is a
-**self-signed local key, not a Play Store key**: fine for sideloading, and Android will refuse
-to update an install that a different key signed.
+### Signing
+
+The APK is signed with a key that is **not in this repository**. Android replaces an install only
+when the new APK carries the key the old one was signed with, so there is exactly one key for
+this app: it signs tagged releases and throwaway branch builds alike, which is what lets a test
+build install over the app already on the phone. Every other arrangement — a key per machine, a
+key per checkout — means uninstalling before each test.
+
+The key lives in the repository's GitHub secrets:
+
+| secret | contents |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | `base64 -w0 ublotse.jks` |
+| `ANDROID_KEYSTORE_PASS` | store/key password |
+| `ANDROID_KEYSTORE_ALIAS` | `androiddebugkey` |
+
+```sh
+base64 -w0 ublotse.jks | gh secret set ANDROID_KEYSTORE_BASE64
+gh secret set ANDROID_KEYSTORE_PASS --body "$(cat password.txt)"
+gh secret set ANDROID_KEYSTORE_ALIAS --body androiddebugkey
+```
+
+`android/build.mjs` reads the same three values from the environment, so a local build is signed
+with the same identity:
+
+```sh
+UBLOTSE_KEYSTORE=~/.ublotse-signing/ublotse.jks \
+UBLOTSE_KEYSTORE_PASS=… UBLOTSE_KEYSTORE_ALIAS=androiddebugkey \
+npm run android:build
+```
+
+**A GitHub secret cannot be read back.** The file has to be kept somewhere else as well — a
+password manager entry, `~/.ublotse-signing/`, whatever survives this machine — because losing it
+means every installed copy of the app is orphaned: it can still be replaced by a build signed
+with that key and by nothing else. `gh secret set` accepts a new value at any time, but it cannot
+tell you the old one.
+
+The build prints the certificate it signed with and warns when it is not the app's identity:
+
+```
+  verify         ok   cert fa24fabdd6027284…
+```
+
+A build whose fingerprint differs will be refused as an update; uninstall once
+(`adb uninstall de.axkirillov.ublotse`) if that ever happens. `.github/workflows/android.yml`
+unpacks the secret into `$RUNNER_TEMP` for the duration of the job, and runs on `main`, on `v*`
+tags and on demand — never on `pull_request`, which would offer the key to any fork.
 
 ### Updates
 
@@ -333,9 +377,9 @@ the first update walks through that screen once and then continues on its own. A
 whole of what this app needs from AndroidX's `FileProvider`.
 
 Android compares signatures, not versions, to decide whether an install may be replaced: the
-signing key has to stay the one it was installed with, so `android/debug.keystore` is kept
-across builds. And the updater compares `versionName`, so any build worth shipping needs its
-`package.json` version bumped, or the installed app will never be offered it.
+signing key has to stay the one it was installed with, which is why `android/debug.keystore` is
+committed rather than generated. And the updater compares `versionName`, so any build worth
+shipping needs its `package.json` version bumped, or the installed app will never be offered it.
 
 ### Tests
 
