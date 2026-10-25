@@ -325,6 +325,25 @@ const LOAN_PAGES = {
       <p>Sie haben nichts anderes ausgeliehen.</p>
     </div>`,
 
+  // The Leipzig catalogue's own theme, as its diagnostic reports it: the item is
+  // "li.result.checked-out", the due date is labelled "Fällig am:", and there is no /Record/ link
+  // anywhere on the page — the title is plain text in the heading and the renewal is a form value.
+  finc: `
+    <div class="mainbody left">
+      <h2>Ausgeliehen</h2>
+      <ul class="record-list">
+        <li id="record1" class="result checked-out">
+          <div class="media">
+            <div class="media-body">
+              <h2><span>Der Name der Rose</span><span class="authors">von: <a href="/Author/Home?author=Eco">Eco, Umberto</a></span></h2>
+              <strong>F\u00e4llig am:  16.11.2026</strong>
+              <label><input type="checkbox" name="renewSelectedIDS[]" value="1234567"> Ausleihe ausw\u00e4hlen</label>
+            </div>
+          </div>
+        </li>
+      </ul>
+    </div>`,
+
   // The same page with nothing in it: no record list at all, only the sentence VuFind prints.
   vufind10Empty: `
     <div class="mainbody">

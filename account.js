@@ -109,8 +109,18 @@ function parseRecordList(html) {
     const item = source.slice(starts[i].from, end);
 
     const anchor = /<a\b[^>]*href="([^"]*\/Record\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/i.exec(item);
-    const span = /<span\b[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>([\s\S]*?)<\/span>/i.exec(item);
-    const title = anchor ? textOf(anchor[2]) : span ? textOf(span[1]) : '';
+    let title = anchor ? textOf(anchor[2]) : '';
+    if (!title) {
+      // Not every theme links the title: this catalogue lists a loan whose record has no Solr
+      // document, and then the title is plain text in a heading. Fall back in that order.
+      const titled = /<([a-zA-Z][a-zA-Z0-9]*)\b[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>([\s\S]*?)<\/\1>/i.exec(item);
+      if (titled) title = textOf(titled[2]);
+    }
+    if (!title) {
+      const heading = /<h[1-4]\b[^>]*>([\s\S]*?)<\/h[1-4]>/i.exec(item);
+      if (heading) title = textOf(heading[1].replace(/<span\b[^>]*class="[^"]*\bauthors\b[^"]*"[^>]*>[\s\S]*?<\/span>/i, ' '));
+    }
+    if (!title) title = longestRun(item);
     if (!title) continue;
 
     const recordHref = anchor ? decodeEntities(anchor[1]) : null;
@@ -212,6 +222,27 @@ function parseLoans(html) {
   }
 
   return rowsOut;
+}
+
+const NOISE_RE =
+  /^(?:Ausleihen?|Verl(?:ä|&auml;)ngern?|Verl(?:ä|&auml;)ngert|F(?:ä|&auml;)llig|R(?:ü|&uuml;|ue)ckgabe(?:datum)?|Barcode|Signatur|Standort|Band|Ausleihstelle|Buch|Online|Medium)/i;
+
+/**
+ * The longest plain text run in the item, skipping dates and the labels around them. A last resort
+ * for a theme that puts the title nowhere in particular.
+ */
+function longestRun(item) {
+  let best = '';
+  const runs = /\>([^<]{2,200})</g;
+  let match;
+  let seen = 0;
+  while ((match = runs.exec(item)) && seen < 8) {
+    const text = decodeEntities(match[1]).replace(/\s+/g, ' ').trim();
+    seen += 1;
+    if (text.length < 4 || DATE_TEXT_RE.test(text) || NOISE_RE.test(text)) continue;
+    if (text.length > best.length) best = text;
+  }
+  return best;
 }
 
 const DATE_TEXT_RE = /\b\d{1,2}\.\d{1,2}\.\d{4}\b|\b\d{4}-\d{2}-\d{2}\b/;
@@ -325,6 +356,32 @@ function scan(html, dateLimit, linkLimit) {
   return { dates, links };
 }
 
+/** One item's markup, from {@code at} to the next item, whitespace collapsed where it is shown. */
+function itemHtml(page, at) {
+  let next = -1;
+  const itemRe = /<li\b([^>]*)>/gi;
+  itemRe.lastIndex = at + 1;
+  let match;
+  while ((match = itemRe.exec(page))) {
+    if (/class="[^"]*\bresult\b[^"]*"/i.test(match[1])) {
+      next = match.index;
+      break;
+    }
+  }
+  const end = next < 0 ? Math.min(page.length, at + 2000) : Math.min(next, at + 2000);
+  return page.slice(at, end);
+}
+
+/** Offset of the first checked-out item, or -1 when the page has none. */
+function firstItemStart(page) {
+  const itemRe = /<li\b([^>]*)>/gi;
+  let match;
+  while ((match = itemRe.exec(page))) {
+    if (/class="[^"]*\bresult\b[^"]*"/i.test(match[1])) return match.index;
+  }
+  return -1;
+}
+
 /** One page's worth of the diagnostic report, character-for-character Account.java's. */
 function pageReport(path, status, html) {
   const page = String(html == null ? '' : html);
@@ -350,7 +407,12 @@ function pageReport(path, status, html) {
       ', daten=' +
       countMatches(DATE_COUNT_RE, page),
   );
-  lines.push('text     ' + abbreviate(textOf(stripScripts(page)), 400));
+  const at = firstItemStart(page);
+  const focus = at < 0 ? page : page.slice(at, at + 4000);
+  lines.push('text     ' + abbreviate(textOf(stripScripts(focus)), 500));
+  if (at >= 0) {
+    lines.push('item     ' + abbreviate(itemHtml(page, at).replace(/\s+/g, ' ').trim(), 800));
+  }
   const found = scan(page, 4, 3);
   for (const one of found.dates) lines.push('datum    ' + one.path + '  "' + one.text + '"');
   for (const one of found.links) lines.push('link     ' + one.path + '  "' + one.text + '"');

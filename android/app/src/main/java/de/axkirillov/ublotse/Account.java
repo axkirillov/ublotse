@@ -85,8 +85,12 @@ public class Account {
       Pattern.compile("class=\"[^\"]*\\bresult\\b[^\"]*\"", Pattern.CASE_INSENSITIVE);
   private static final Pattern TITLE_SPAN_RE =
       Pattern.compile(
-          "<span\\b[^>]*class=\"[^\"]*\\btitle\\b[^\"]*\"[^>]*>([\\s\\S]*?)</span>",
+          "<([a-zA-Z][a-zA-Z0-9]*)\\b[^>]*class=\"[^\"]*\\btitle\\b[^\"]*\"[^>]*>"
+              + "([\\s\\S]*?)</\\1>",
           Pattern.CASE_INSENSITIVE);
+  private static final Pattern HEADING_RE =
+      Pattern.compile("<h[1-4]\\b[^>]*>([\\s\\S]*?)</h[1-4]>", Pattern.CASE_INSENSITIVE);
+  private static final Pattern TEXT_RUN_RE = Pattern.compile(">([^<]{2,200})<");
   private static final Pattern AUTHORS_SPAN_RE =
       Pattern.compile(
           "<span\\b[^>]*class=\"[^\"]*\\bauthors\\b[^\"]*\"[^>]*>([\\s\\S]*?)</span>",
@@ -572,7 +576,12 @@ public class Account {
         .append(", daten=")
         .append(count(DATE_RE, html))
         .append('\n');
-    out.append("text     ").append(abbreviate(textOf(stripScripts(html)), 400)).append('\n');
+    int at = firstItemStart(html);
+    String focus = at < 0 ? html : html.substring(at, Math.min(html.length(), at + 4000));
+    out.append("text     ").append(abbreviate(textOf(stripScripts(focus)), 500)).append('\n');
+    if (at >= 0) {
+      out.append("item     ").append(abbreviate(collapse(itemHtml(html, at)), 800)).append('\n');
+    }
     Scan scan = scan(html, 4, 3);
     for (Path finding : scan.dates) {
       out.append("datum    ").append(finding.path).append("  \"").append(finding.text).append("\"\n");
@@ -581,6 +590,30 @@ public class Account {
       out.append("link     ").append(finding.path).append("  \"").append(finding.text).append("\"\n");
     }
     return out.toString();
+  }
+
+  /** Offset of the first checked-out item, or -1 when the page has none. */
+  private static int firstItemStart(String html) {
+    Matcher items = RESULT_ITEM_RE.matcher(html == null ? "" : html);
+    while (items.find()) {
+      if (RESULT_CLASS_RE.matcher(items.group(1)).find()) return items.start();
+    }
+    return -1;
+  }
+
+  /** One item's markup, from {@code at} to the next item, whitespace collapsed for reading. */
+  private static String itemHtml(String page, int at) {
+    int next = -1;
+    Matcher items = RESULT_ITEM_RE.matcher(page);
+    items.region(at + 1, page.length());
+    while (items.find()) {
+      if (RESULT_CLASS_RE.matcher(items.group(1)).find()) {
+        next = items.start();
+        break;
+      }
+    }
+    int end = next < 0 ? Math.min(page.length(), at + 2000) : Math.min(next, at + 2000);
+    return page.substring(at, end);
   }
 
   /** One finding of the scan: where it sits, and what it said. */
@@ -910,9 +943,22 @@ public class Account {
       String item = page.substring(from, Math.min(to, page.length()));
 
       Matcher anchor = ANCHOR_RE.matcher(item);
-      Matcher span = TITLE_SPAN_RE.matcher(item);
       boolean hasAnchor = anchor.find();
-      String title = hasAnchor ? textOf(anchor.group(2)) : span.find() ? textOf(span.group(1)) : "";
+      String title = hasAnchor ? textOf(anchor.group(2)) : "";
+      if (title.isEmpty()) {
+        // Not every theme links the title: this catalogue lists a loan whose record has no Solr
+        // document, and then the title is plain text in a heading. Fall back in that order.
+        Matcher titled = TITLE_SPAN_RE.matcher(item);
+        if (titled.find()) title = textOf(titled.group(2));
+      }
+      if (title.isEmpty()) {
+        Matcher heading = HEADING_RE.matcher(item);
+        if (heading.find()) {
+          String inner = AUTHORS_SPAN_RE.matcher(heading.group(1)).replaceAll(" ");
+          title = textOf(inner);
+        }
+      }
+      if (title.isEmpty()) title = longestRun(item);
       if (title.isEmpty()) continue;
 
       String recordHref = null;
@@ -1104,6 +1150,31 @@ public class Account {
     if (!match.find()) return null;
     return match.group(3) + "-" + pad(match.group(2)) + "-" + pad(match.group(1));
   }
+
+  /**
+   * The longest plain text run in the item, skipping dates and the labels around them. A last
+   * resort for a theme that puts the title nowhere in particular.
+   */
+  static String longestRun(String item) {
+    String best = "";
+    Matcher runs = TEXT_RUN_RE.matcher(item);
+    int seen = 0;
+    while (runs.find() && seen < 8) {
+      String text = collapse(decodeEntities(runs.group(1)));
+      seen += 1;
+      if (text.length() < 4 || DATE_RE.matcher(text).find()) continue;
+      if (NOISE_RE.matcher(text).find()) continue;
+      if (text.length() > best.length()) best = text;
+    }
+    return best;
+  }
+
+  private static final Pattern NOISE_RE =
+      Pattern.compile(
+          "^(?:Ausleihen?|Verl(?:ä|&auml;)ngern?|Verl(?:ä|&auml;)ngert|F(?:ä|&auml;)llig|"
+              + "R(?:ü|&uuml;|ue)ckgabe(?:datum)?|Barcode|Signatur|Standort|Band|Ausleihstelle|"
+              + "Buch|Online|Medium)",
+          Pattern.CASE_INSENSITIVE);
 
   /** {@code %}-encoding for one form value; the catalogue's own encoding, not a URL. */
   private static String formEncode(String value) {

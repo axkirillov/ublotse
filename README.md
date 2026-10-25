@@ -255,6 +255,12 @@ keeps the resulting cookies in memory, keyed by client id. Every request carries
 the gate cookie the cover proxy also needs, and redirects are followed by hand so a
 `Set-Cookie` on the 302 is not lost. `GET /MyResearch/CheckedOut` is then parsed into JSON.
 
+The Leipzig theme adds a third wrinkle: its item is `li.result.checked-out`, the due date is
+labelled `Fällig am:`, and there is no `/Record/` link anywhere on the page — the record has no
+Solr document, so the title is plain text in the heading. The title is therefore taken from a
+record link, else from an element whose class is `title`, else from the item's heading, else from
+the longest text run in it, in that order.
+
 That page has two shapes and the parser reads both. VuFind 10 — what
 `katalog.ub.uni-leipzig.de` runs, at 10.1.4 with the `bootstrap5` theme — renders the items as
 `<ul class="record-list">` with one `<li class="result">` per loan, a `<span class="authors">`
