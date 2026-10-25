@@ -214,6 +214,149 @@ function parseLoans(html) {
   return rowsOut;
 }
 
+const DATE_TEXT_RE = /\b\d{1,2}\.\d{1,2}\.\d{4}\b|\b\d{4}-\d{2}-\d{2}\b/;
+const DATE_COUNT_RE = /\b\d{1,2}\.\d{1,2}\.\d{4}\b|\b\d{4}-\d{2}-\d{2}\b/g;
+const VOID_ELEMENTS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source',
+  'track', 'wbr',
+]);
+
+function countMatches(pattern, text) {
+  const matches = String(text).match(pattern);
+  return matches ? matches.length : 0;
+}
+
+function countAll(text, needle) {
+  let total = 0;
+  let at = String(text).indexOf(needle);
+  while (at >= 0) {
+    total += 1;
+    at = String(text).indexOf(needle, at + needle.length);
+  }
+  return total;
+}
+
+function stripScripts(html) {
+  return String(html)
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ');
+}
+
+function abbreviate(text, limit) {
+  const value = String(text == null ? '' : text).trim();
+  return value.length <= limit ? value : value.slice(0, limit - 1) + '\u2026';
+}
+
+function classSuffix(attributes) {
+  const match = /class="([^"]*)"/i.exec(String(attributes || ''));
+  if (!match) return '';
+  let suffix = '';
+  for (const token of match[1].trim().split(/\s+/)) {
+    if (!token || token.startsWith('checkbox_') || token.length > 24) continue;
+    suffix += '.' + token;
+  }
+  return suffix;
+}
+
+function joinPath(stack, window) {
+  return stack.slice(-window).join('>');
+}
+
+function elementName(element) {
+  const dot = element.indexOf('.');
+  return dot < 0 ? element : element.slice(0, dot);
+}
+
+/**
+ * Walk the tags once, keeping a stack of open elements, and report where the dates and the record
+ * links sit. This is the whole point of the diagnostic: no template can be assumed, so the report
+ * says which element the due date is inside of and which element holds the record link.
+ *
+ * A stray closing tag pops at most itself, and void elements never stack — this describes where
+ * something sits, it is not a DOM.
+ */
+function scan(html, dateLimit, linkLimit) {
+  const dates = [];
+  const links = [];
+  const stack = [];
+  const seenDates = new Set();
+  const seenLinks = new Set();
+  const page = String(html == null ? '' : html);
+  const tagRe = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^>]*)>/g;
+  let at = 0;
+  let tag;
+  while ((tag = tagRe.exec(page))) {
+    const text = page.slice(at, tag.index);
+    at = tagRe.lastIndex;
+
+    if (text && dates.length < dateLimit && DATE_TEXT_RE.test(text) && stack.length) {
+      const path = joinPath(stack, 4);
+      if (!seenDates.has(path)) {
+        seenDates.add(path);
+        dates.push({ path, text: abbreviate(text, 70) });
+      }
+    }
+
+    const name = (tag[2] || '').toLowerCase();
+    if (!name) continue;
+    const closing = Boolean(tag[1]);
+
+    if (!closing && name === 'a' && links.length < linkLimit && /href="[^"]*\/Record\//i.test(tag[3])) {
+      const close = page.indexOf('</a', at);
+      const anchor = close > at ? page.slice(at, close) : '';
+      const path = joinPath(stack, 3) + '>a';
+      if (!seenLinks.has(path)) {
+        seenLinks.add(path);
+        links.push({ path, text: abbreviate(anchor, 70) });
+      }
+    }
+
+    if (closing) {
+      for (let i = stack.length - 1; i >= 0; i -= 1) {
+        if (elementName(stack[i]) === name) {
+          stack.length = i;
+          break;
+        }
+      }
+    } else if (!VOID_ELEMENTS.has(name)) {
+      stack.push(name + classSuffix(tag[3]));
+    }
+  }
+  return { dates, links };
+}
+
+/** One page's worth of the diagnostic report, character-for-character Account.java's. */
+function pageReport(path, status, html) {
+  const page = String(html == null ? '' : html);
+  const lines = [];
+  lines.push('=== ' + path + ' ===');
+  lines.push(
+    'seite    ' +
+      status +
+      ', ' +
+      page.length +
+      ' B, logout=' +
+      (/\/MyResearch\/Logout/.test(page) ? 'ja' : 'nein') +
+      ', ausleihen=' +
+      parseLoans(page).length,
+  );
+  lines.push(
+    'zaehler  tables=' +
+      countMatches(/<table\b[\s\S]*?<\/table>/gi, page) +
+      ', li.result=' +
+      countMatches(/<li\b[^>]*class="[^"]*\bresult\b[^"]*"[^>]*>/gi, page) +
+      ', /Record/=' +
+      countAll(page, '/Record/') +
+      ', daten=' +
+      countMatches(DATE_COUNT_RE, page),
+  );
+  lines.push('text     ' + abbreviate(textOf(stripScripts(page)), 400));
+  const found = scan(page, 4, 3);
+  for (const one of found.dates) lines.push('datum    ' + one.path + '  "' + one.text + '"');
+  for (const one of found.links) lines.push('link     ' + one.path + '  "' + one.text + '"');
+  return lines.join('\n') + '\n';
+}
+
 function extractAlert(html) {
   const match = /class="[^"]*(?:alert|error|fehler)[^"]*"[^>]*>([\s\S]{0,600}?)<\//i.exec(String(html));
   const text = match ? textOf(match[1]) : '';
@@ -404,6 +547,24 @@ export function createAccount({ catalogueBase, sendJson, readJsonBody, clientIdO
       return;
     }
 
+    if (pathname === '/api/account/diagnose' && req.method === 'GET') {
+      if (!session.loggedIn) {
+        sendJson(res, 401, { error: 'Nicht angemeldet.', loggedIn: false });
+        return;
+      }
+      let report = 'Konto-Diagnose\n';
+      for (const pagePath of ['/MyResearch/CheckedOut', '/MyResearch/Home']) {
+        try {
+          const page = await request(session, pagePath);
+          report += '\n' + pageReport(pagePath, page.status, page.html);
+        } catch (error) {
+          report += '\n=== ' + pagePath + ' ===\nfehler  ' + error.message + '\n';
+        }
+      }
+      sendJson(res, 200, { report });
+      return;
+    }
+
     if (pathname === '/api/account/renew' && req.method === 'POST') {
       if (!session.loggedIn) {
         sendJson(res, 401, { error: 'Nicht angemeldet.', loggedIn: false });
@@ -454,4 +615,4 @@ export function createAccount({ catalogueBase, sendJson, readJsonBody, clientIdO
   return { handle };
 }
 
-export { parseLoans, germanToIso };
+export { parseLoans, germanToIso, pageReport };

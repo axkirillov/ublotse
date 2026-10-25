@@ -176,7 +176,7 @@ const json = JSON_VALUES.map((value) => ({ value, expected: JSON.stringify(value
 // against a retyped copy of what that code is believed to do.
 // ---------------------------------------------------------------------------
 
-const { parseLoans, germanToIso } = await import(pathToFileURL(join(ROOT, 'account.js')).href);
+const { parseLoans, germanToIso, pageReport } = await import(pathToFileURL(join(ROOT, 'account.js')).href);
 
 const LOAN_PAGES = {
   german: `
@@ -356,6 +356,13 @@ const account = {
     expected: parseLoans(html),
   })),
   dates: dates.map((value) => ({ value, expected: germanToIso(value) })),
+  // The diagnostic is a pure function of the page, so both implementations must print the same
+  // report for the same bytes — that is what keeps the Java port and account.js one implementation.
+  diagnose: Object.entries(LOAN_PAGES).map(([name, html]) => ({
+    name,
+    html,
+    expected: pageReport('/MyResearch/CheckedOut', 200, html),
+  })),
 };
 
 console.log(

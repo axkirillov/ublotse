@@ -390,6 +390,47 @@ async function logoutAccount() {
   toast('Abgemeldet');
 }
 
+async function showDiagnose(button) {
+  button.disabled = true;
+  toast('Frage den Katalog …');
+  try {
+    const data = await accountRequest('/api/account/diagnose');
+    els.results.innerHTML =
+      '<div class="state"><p>Das hat der Katalog geantwortet:</p>' +
+      '<pre class="diagnose" id="diagnose-text">' +
+      esc(data.report || '') +
+      '</pre>' +
+      '<button type="button" class="btn-primary" data-account-action="copy-diagnose">Kopieren</button> ' +
+      '<button type="button" class="btn-plain small" data-account-action="refresh">Zurück</button>' +
+      '</div>';
+    const text = document.getElementById('diagnose-text');
+    button = els.results.querySelector('[data-account-action="copy-diagnose"]');
+    if (text && button) button.dataset.report = text.textContent;
+  } catch (error) {
+    toast('Diagnose fehlgeschlagen: ' + error.message);
+    render();
+  }
+}
+
+async function copyDiagnose(button) {
+  const report = button.dataset.report || '';
+  try {
+    await navigator.clipboard.writeText(report);
+    toast('Kopiert');
+  } catch {
+    // Older WebViews have no clipboard API: select the <pre> so a long-press can copy it.
+    const text = document.getElementById('diagnose-text');
+    if (text) {
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      toast('Text markiert — zum Kopieren gedrückt halten');
+    }
+  }
+}
+
 async function renewLoan(button) {
   button.disabled = true;
   try {
@@ -483,7 +524,13 @@ function renderAccount() {
     return;
   }
   if (!loans.length) {
-    els.results.innerHTML = '<div class="state">Zurzeit ist nichts ausgeliehen.</div>';
+    // An empty list is either a real empty account or a page the parser did not understand, and
+    // only the catalogue knows which. The diagnostic says what it actually sent.
+    els.results.innerHTML =
+      '<div class="state">Zurzeit ist nichts ausgeliehen.' +
+      '<p class="account-note">Wenn im Katalog Ausleihen stehen, ' +
+      '<button type="button" class="btn-plain small" data-account-action="diagnose">zeig, was der Katalog geliefert hat</button>.</p>' +
+      '</div>';
     return;
   }
 
@@ -1031,6 +1078,8 @@ els.results.addEventListener('click', (event) => {
     if (action === 'logout') logoutAccount();
     else if (action === 'refresh') refreshAccount();
     else if (action === 'renew') renewLoan(accountButton);
+    else if (action === 'diagnose') showDiagnose(accountButton);
+    else if (action === 'copy-diagnose') copyDiagnose(accountButton);
     return;
   }
 

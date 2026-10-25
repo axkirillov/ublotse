@@ -401,6 +401,15 @@ public final class Tests {
           deepEquals(expected, actual),
           describeDifference(Json.write(expected), Json.write(actual)));
     }
+    for (Object item : (List<Object>) account.get("diagnose")) {
+      Map<String, Object> page = (Map<String, Object>) item;
+      String expected = (String) page.get("expected");
+      String actual = Account.pageReport("/MyResearch/CheckedOut", 200, (String) page.get("html"));
+      check(
+          "diagnose report for \"" + page.get("name") + "\" matches account.js",
+          expected.equals(actual),
+          describeDifference(expected, actual));
+    }
     for (Object item : (List<Object>) account.get("dates")) {
       Map<String, Object> testCase = (Map<String, Object>) item;
       String value = (String) testCase.get("value");

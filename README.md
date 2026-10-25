@@ -264,6 +264,16 @@ column labels (`Fällig`, `Rückgabe`, `Due Date`, `Ausgeliehen`, `Borrowed`), t
 date in the row. `account.js` and `Account.java` are held to the same answers by fixtures taken
 from `account.js` itself — see the tests below.
 
+When a logged-in account answers with no loans, the page the app is guessing at is on the
+catalogue's side, so `GET /api/account/diagnose` describes it instead: status, size, how many
+tables and record-list items and dates and record links it contains, the first 400 characters of
+visible text, and — the part that actually decides a parser — the tag path (`ul.record-list >
+li.result > …`) each date and record link sits in, for `/MyResearch/CheckedOut` and
+`/MyResearch/Home`. The loans view offers it under the empty state, with a copy button, because
+a diagnostic that cannot leave the phone is not a diagnostic. The report is a pure function of
+the page, so `account.js` and `Account.java` are held to producing the same characters for the
+same fixture.
+
 Renewal is not a link in VuFind 10. The list carries each item's renewal id in a hidden field
 (`renewSelectedIDS[]`) and the page's `csrf` hash, and renewing means posting that form back to
 `/MyResearch/CheckedOut`. The API therefore takes the id, not a URL: `POST /api/account/renew`

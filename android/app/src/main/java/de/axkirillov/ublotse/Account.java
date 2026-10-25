@@ -10,9 +10,11 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -76,6 +78,9 @@ public class Account {
           "<div\\b[^>]*class=\"[^\"]*alert[^\"]*\"[^>]*>([\\s\\S]{0,400}?)</div>",
           Pattern.CASE_INSENSITIVE);
   private static final Pattern RESULT_ITEM_RE = Pattern.compile("<li\\b([^>]*)>", Pattern.CASE_INSENSITIVE);
+  private static final Pattern RESULT_CLASS_ITEM_RE =
+      Pattern.compile(
+          "<li\\b[^>]*class=\"[^\"]*\\bresult\\b[^\"]*\"[^>]*>", Pattern.CASE_INSENSITIVE);
   private static final Pattern RESULT_CLASS_RE =
       Pattern.compile("class=\"[^\"]*\\bresult\\b[^\"]*\"", Pattern.CASE_INSENSITIVE);
   private static final Pattern TITLE_SPAN_RE =
@@ -299,7 +304,8 @@ public class Account {
             || "/api/account/login".equals(path)
             || "/api/account/logout".equals(path)
             || "/api/account/loans".equals(path)
-            || "/api/account/renew".equals(path);
+            || "/api/account/renew".equals(path)
+            || "/api/account/diagnose".equals(path);
     if (!known) {
       return WebResponse.json(404, Json.obj("error", "Unbekannter Konto-Endpunkt."));
     }
@@ -336,6 +342,17 @@ public class Account {
           return WebResponse.json(200, loansPayload(session, loadLoans(session)));
         } catch (SessionExpired expired) {
           return WebResponse.json(401, Json.obj("error", expired.getMessage(), "loggedIn", false));
+        } catch (IOException failed) {
+          return WebResponse.json(502, Json.obj("error", messageOf(failed), "loggedIn", true));
+        }
+      }
+
+      if ("/api/account/diagnose".equals(path) && "GET".equals(method)) {
+        if (!session.loggedIn) {
+          return WebResponse.json(401, Json.obj("error", "Nicht angemeldet.", "loggedIn", false));
+        }
+        try {
+          return WebResponse.json(200, Json.obj("report", diagnose(session)));
         } catch (IOException failed) {
           return WebResponse.json(502, Json.obj("error", messageOf(failed), "loggedIn", true));
         }
@@ -501,6 +518,206 @@ public class Account {
     }
     return parseLoans(page.body);
   }
+
+  // -------------------------------------------------------------------------
+  // Diagnose
+  // -------------------------------------------------------------------------
+
+  /**
+   * Say what the catalogue actually answered, in a form short enough to copy out of a phone. The
+   * point is the tag path: when the parser reports no loans, the useful question is where the dates
+   * and the record links sit in the page, and no template can be assumed to answer it.
+   */
+  String diagnose(Session session) throws IOException {
+    StringBuilder out = new StringBuilder();
+    out.append("Konto-Diagnose\n");
+    for (String path : new String[] {"/MyResearch/CheckedOut", "/MyResearch/Home"}) {
+      Reply page;
+      try {
+        page = request(session, path, "GET", null);
+      } catch (IOException failed) {
+        out.append("\n=== ").append(path).append(" ===\n");
+        out.append("fehler  ").append(messageOf(failed)).append('\n');
+        continue;
+      }
+      out.append('\n').append(pageReport(path, page.status, page.body));
+    }
+    return out.toString();
+  }
+
+  /**
+   * One page's worth of the report. Static and pure so that account.js can be held to producing the
+   * same characters for the same page, which is what makes the two parsers one implementation.
+   */
+  static String pageReport(String path, int status, String html) {
+    html = html == null ? "" : html;
+    StringBuilder out = new StringBuilder();
+    out.append("=== ").append(path).append(" ===\n");
+    out.append("seite    ")
+        .append(status)
+        .append(", ")
+        .append(html.length())
+        .append(" B, logout=")
+        .append(LOGOUT_RE.matcher(html).find() ? "ja" : "nein")
+        .append(", ausleihen=")
+        .append(parseLoans(html).size())
+        .append('\n');
+    out.append("zaehler  ")
+        .append("tables=")
+        .append(count(TABLE_RE, html))
+        .append(", li.result=")
+        .append(count(RESULT_CLASS_ITEM_RE, html))
+        .append(", /Record/=")
+        .append(countAll(html, "/Record/"))
+        .append(", daten=")
+        .append(count(DATE_RE, html))
+        .append('\n');
+    out.append("text     ").append(abbreviate(textOf(stripScripts(html)), 400)).append('\n');
+    Scan scan = scan(html, 4, 3);
+    for (Path finding : scan.dates) {
+      out.append("datum    ").append(finding.path).append("  \"").append(finding.text).append("\"\n");
+    }
+    for (Path finding : scan.links) {
+      out.append("link     ").append(finding.path).append("  \"").append(finding.text).append("\"\n");
+    }
+    return out.toString();
+  }
+
+  /** One finding of the scan: where it sits, and what it said. */
+  private static final class Path {
+    final String path;
+    final String text;
+
+    Path(String path, String text) {
+      this.path = path;
+      this.text = text;
+    }
+  }
+
+  /** The tag paths that today's page structure has to be guessed at from. */
+  private static final class Scan {
+    final List<Path> dates = new ArrayList<>();
+    final List<Path> links = new ArrayList<>();
+  }
+
+  /**
+   * Walk the tags once, keeping a stack of open elements, and report where the dates and the record
+   * links sit. This is the whole point of the diagnostic: no template can be assumed, so the report
+   * says which element the due date is inside of and which element holds the record link.
+   *
+   * <p>A stray closing tag pops at most itself, and void elements never stack — this describes
+   * where something sits, it is not a DOM.
+   */
+  private static Scan scan(String html, int dateLimit, int linkLimit) {
+    Scan scan = new Scan();
+    String page = html == null ? "" : html;
+    List<String> stack = new ArrayList<>();
+    Set<String> seenDates = new LinkedHashSet<>();
+    Set<String> seenLinks = new LinkedHashSet<>();
+    Matcher tag = TAG_RE.matcher(page);
+    int at = 0;
+    while (tag.find()) {
+      String text = page.substring(at, tag.start());
+      at = tag.end();
+
+      if (!text.isEmpty() && scan.dates.size() < dateLimit && DATE_RE.matcher(text).find()
+          && !stack.isEmpty()) {
+        String path = join(stack, 4);
+        if (seenDates.add(path)) scan.dates.add(new Path(path, abbreviate(text, 70)));
+      }
+
+      String name = tag.group(2) == null ? "" : tag.group(2).toLowerCase(Locale.ROOT);
+      if (name.isEmpty()) continue;
+      boolean closing = !tag.group(1).isEmpty();
+
+      if (!closing
+          && "a".equals(name)
+          && scan.links.size() < linkLimit
+          && RECORD_HREF_ATTR_RE.matcher(tag.group(3)).find()) {
+        int close = page.indexOf("</a", at);
+        String anchor = close > at ? page.substring(at, close) : "";
+        String path = join(stack, 3) + ">a";
+        if (seenLinks.add(path)) scan.links.add(new Path(path, abbreviate(anchor, 70)));
+      }
+
+      if (closing) {
+        for (int i = stack.size() - 1; i >= 0; i -= 1) {
+          if (elementName(stack.get(i)).equals(name)) {
+            while (stack.size() > i) stack.remove(stack.size() - 1);
+            break;
+          }
+        }
+      } else if (!VOID_ELEMENTS.contains(name)) {
+        stack.add(name + classSuffix(tag.group(3)));
+      }
+    }
+    return scan;
+  }
+
+  private static String elementName(String element) {
+    int dot = element.indexOf('.');
+    return dot < 0 ? element : element.substring(0, dot);
+  }
+
+  private static String classSuffix(String attributes) {
+    Matcher classes = CLASS_ATTR_RE.matcher(attributes == null ? "" : attributes);
+    if (!classes.find()) return "";
+    StringBuilder out = new StringBuilder();
+    for (String token : classes.group(1).trim().split("\\s+")) {
+      if (token.isEmpty() || token.startsWith("checkbox_") || token.length() > 24) continue;
+      out.append('.').append(token);
+    }
+    return out.toString();
+  }
+
+  private static String join(List<String> stack, int window) {
+    StringBuilder out = new StringBuilder();
+    for (int i = Math.max(0, stack.size() - window); i < stack.size(); i += 1) {
+      if (out.length() > 0) out.append('>');
+      out.append(stack.get(i));
+    }
+    return out.toString();
+  }
+
+  private static int count(Pattern pattern, String html) {
+    Matcher matcher = pattern.matcher(html == null ? "" : html);
+    int total = 0;
+    while (matcher.find()) total += 1;
+    return total;
+  }
+
+  private static int countAll(String html, String needle) {
+    int total = 0;
+    int at = html.indexOf(needle);
+    while (at >= 0) {
+      total += 1;
+      at = html.indexOf(needle, at + needle.length());
+    }
+    return total;
+  }
+
+  private static String abbreviate(String text, int limit) {
+    String value = text == null ? "" : text.trim();
+    return value.length() <= limit ? value : value.substring(0, limit - 1) + "\u2026";
+  }
+
+  private static String stripScripts(String html) {
+    return html == null
+        ? ""
+        : html.replaceAll("(?is)<script\\b[^>]*>[\\s\\S]*?</script>", " ")
+            .replaceAll("(?is)<style\\b[^>]*>[\\s\\S]*?</style>", " ");
+  }
+
+  private static final Set<String> VOID_ELEMENTS =
+      new LinkedHashSet<>(
+          java.util.Arrays.asList(
+              "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+              "source", "track", "wbr"));
+  private static final Pattern TAG_RE = Pattern.compile("<(/?)([a-zA-Z][a-zA-Z0-9-]*)([^>]*)>");
+  private static final Pattern RECORD_HREF_ATTR_RE =
+      Pattern.compile("href=\"[^\"]*/Record/", Pattern.CASE_INSENSITIVE);
+  private static final Pattern CLASS_ATTR_RE =
+      Pattern.compile("class=\"([^\"]*)\"", Pattern.CASE_INSENSITIVE);
 
   // -------------------------------------------------------------------------
   // Catalogue requests
