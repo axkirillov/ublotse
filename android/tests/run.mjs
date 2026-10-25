@@ -285,6 +285,53 @@ const LOAN_PAGES = {
       </tr>
     </table>`,
 
+  // VuFind 10 renders the checked-out items as a record list, not a table, and expresses renewal
+  // as a hidden form value instead of a link. This is the shape katalog.ub.uni-leipzig.de serves.
+  vufind10: `
+    <div class="mainbody">
+      <h2>Ihre ausgeliehenen Medien</h2>
+      <form name="renewals" method="post" id="renewals" data-clear-account-cache="checkedOut">
+        <input type="hidden" value="csrf-hash-9" name="csrf">
+        <input type="hidden" id="submitType" name="renewSelected" value="1">
+        <ul class="record-list">
+          <li id="record0-1610511743" class="result">
+            <div class="checkbox">
+              <label><input class="checkbox-select-item" type="checkbox" name="renewSelectedIDS[]" value="0-1610511743|1|12.04.2025" id="checkbox_01610511743112042025" aria-label="Ausleihe ausw\u00e4hlen"></label>
+              <input type="hidden" name="selectAllIDS[]" value="0-1610511743|1|12.04.2025">
+              <input type="hidden" name="renewAllIDS[]" value="0-1610511743|1|12.04.2025">
+            </div>
+            <div class="media">
+              <div class="media-body">
+                <h2>
+                  <a href="/Record/0-1610511743" class="title">Lolita : Roman</a>
+                  <span class="authors">von: <a href="/Author/Home?author=Nabokov%2C+Vladimir">Nabokov, Vladimir</a><br></span>
+                </h2>
+                <span class="format">Buch</span><br>
+                <strong>R\u00fcckgabedatum: 02.04.2025</strong>
+              </div>
+            </div>
+          </li>
+          <li id="record0-99" class="result">
+            <div class="media">
+              <div class="media-body">
+                <h2><span class="title">Der Zauberberg</span></h2>
+                <strong>R\u00fcckgabedatum: 2.5.2025</strong>
+                <div class="alert alert-danger">Die Leihfrist ist abgelaufen</div>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </form>
+      <p>Sie haben nichts anderes ausgeliehen.</p>
+    </div>`,
+
+  // The same page with nothing in it: no record list at all, only the sentence VuFind prints.
+  vufind10Empty: `
+    <div class="mainbody">
+      <h2>Ihre ausgeliehenen Medien</h2>
+      Sie haben nichts von uns ausgeliehen.
+    </div>`,
+
   empty: `
     <div class="alert alert-info">Sie haben zurzeit nichts ausgeliehen.</div>,
     <p>Keine Ausleihen.</p>`,

@@ -395,7 +395,7 @@ async function renewLoan(button) {
   try {
     const data = await accountRequest('/api/account/renew', {
       method: 'POST',
-      body: JSON.stringify({ href: button.dataset.href }),
+      body: JSON.stringify({ href: button.dataset.href, renewId: button.dataset.renewId }),
     });
     state.account.loans = data.items || [];
     toast(data.message || 'Ausleihe verlängert');
@@ -421,8 +421,14 @@ function dueState(loan) {
 
 function loanHtml(loan) {
   const due = dueState(loan);
-  const renew = loan.renewHref
-    ? '<button type="button" class="btn-plain small" data-account-action="renew" data-href="' + esc(loan.renewHref) + '">Verlängern</button>'
+  // VuFind either links to a renewal or puts the item's renewal id in the page's own form; either
+  // way the renewal is the catalogue's business, so only the ids cross the API.
+  const renew = loan.renewId || loan.renewHref
+    ? '<button type="button" class="btn-plain small" data-account-action="renew" data-href="' +
+      esc(loan.renewHref || '') +
+      '" data-renew-id="' +
+      esc(loan.renewId || '') +
+      '">Verlängern</button>'
     : '';
   const href = loan.recordHref ? 'https://katalog.ub.uni-leipzig.de' + loan.recordHref : '';
   const title = href

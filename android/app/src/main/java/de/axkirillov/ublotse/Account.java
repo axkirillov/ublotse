@@ -55,6 +55,39 @@ public class Account {
       Pattern.compile(
           "<a\\b[^>]*href=\"([^\"]*(?:renew|verlaengern|verl(?:ä|&auml;)ngern)[^\"]*)\"[^>]*>",
           Pattern.CASE_INSENSITIVE);
+  /**
+   * The other renew shape: VuFind drivers without {@code renewMyItemsLink} put the renewal id in a
+   * hidden field of the page's own form and post it back, so there is no link to follow.
+   */
+  private static final Pattern RENEW_FORM_ID_RE =
+      Pattern.compile(
+          "<input\\b(?=[^>]*name=\"(?:renewAllIDS|renewSelectedIDS|selectAllIDS)\\[\\]\")"
+              + "(?=[^>]*value=\"([^\"]*)\")[^>]*>",
+          Pattern.CASE_INSENSITIVE);
+  private static final Pattern RENEW_ID_LABEL_RE =
+      Pattern.compile(
+          "(?:R(?:ü|&uuml;|ue)ckgabedatum|Due Date|F(?:ä|&auml;|ae)llig(?: am)?|Leihfrist|Frist)"
+              + "\\s*:?\\s*(?:<[^>]*>\\s*)*",
+          Pattern.CASE_INSENSITIVE);
+  private static final Pattern ALERT_SUCCESS_RE =
+      Pattern.compile("class=\"[^\"]*alert-success", Pattern.CASE_INSENSITIVE);
+  private static final Pattern FLASH_TEXT_RE =
+      Pattern.compile(
+          "<div\\b[^>]*class=\"[^\"]*alert[^\"]*\"[^>]*>([\\s\\S]{0,400}?)</div>",
+          Pattern.CASE_INSENSITIVE);
+  private static final Pattern RESULT_ITEM_RE = Pattern.compile("<li\\b([^>]*)>", Pattern.CASE_INSENSITIVE);
+  private static final Pattern RESULT_CLASS_RE =
+      Pattern.compile("class=\"[^\"]*\\bresult\\b[^\"]*\"", Pattern.CASE_INSENSITIVE);
+  private static final Pattern TITLE_SPAN_RE =
+      Pattern.compile(
+          "<span\\b[^>]*class=\"[^\"]*\\btitle\\b[^\"]*\"[^>]*>([\\s\\S]*?)</span>",
+          Pattern.CASE_INSENSITIVE);
+  private static final Pattern AUTHORS_SPAN_RE =
+      Pattern.compile(
+          "<span\\b[^>]*class=\"[^\"]*\\bauthors\\b[^\"]*\"[^>]*>([\\s\\S]*?)</span>",
+          Pattern.CASE_INSENSITIVE);
+  private static final Pattern ANY_ANCHOR_RE =
+      Pattern.compile("<a\\b[^>]*>([\\s\\S]*?)</a>", Pattern.CASE_INSENSITIVE);
   private static final Pattern RECORD_ID_RE = Pattern.compile("(?:/Record/)([^?\"'/]+)");
   private static final Pattern TABLE_HINT_RE =
       Pattern.compile(
@@ -65,7 +98,9 @@ public class Account {
           "f(?:ä|&auml;|ae)llig|due|r(?:ü|&uuml;|ue)ckgabe", Pattern.CASE_INSENSITIVE);
   private static final Pattern BORROWED_HEADER_RE =
       Pattern.compile("ausgeliehen|borrowed|seit", Pattern.CASE_INSENSITIVE);
-  private static final Pattern DATE_RE = Pattern.compile("\\b\\d{1,2}\\.\\d{1,2}\\.\\d{4}\\b");
+  private static final Pattern DATE_RE =
+      Pattern.compile("\\b\\d{1,2}\\.\\d{1,2}\\.\\d{4}\\b|\\b\\d{4}-\\d{2}-\\d{2}\\b");
+  private static final Pattern ISO_DATE_RE = Pattern.compile("\\b(\\d{4})-(\\d{2})-(\\d{2})\\b");
   private static final Pattern GERMAN_DATE_RE = Pattern.compile("(\\d{1,2})\\.(\\d{1,2})\\.(\\d{4})");
   private static final Pattern ALERT_RE =
       Pattern.compile(
@@ -376,17 +411,50 @@ public class Account {
 
   private WebResponse renew(Session session, byte[] body) {
     Map<String, Object> request = jsonBody(body);
-    String target = safeRenewTarget(request == null ? "" : String.valueOf(valueOr(request, "href", "")));
-    if (target == null) {
-      return WebResponse.json(400, Json.obj("error", "Ungültiger Verlängerungslink."));
-    }
+    String renewId = request == null ? "" : String.valueOf(valueOr(request, "renewId", ""));
+    if (renewId.length() > 400) renewId = renewId.substring(0, 400);
     try {
-      Reply result = request(session, target, "GET", null);
-      boolean renewed = RENEWED_RE.matcher(result.body).find();
+      boolean renewed;
+      String message;
+      if (!renewId.isEmpty()) {
+        // The common case: the checked-out page carries the item's renewal id and the csrf hash
+        // its own form needs, so the renewal is a post back to that page.
+        Reply page = request(session, "/MyResearch/CheckedOut", "GET", null);
+        Matcher csrf = CSRF_FIRST_RE.matcher(page.body);
+        if (!csrf.find()) {
+          csrf = CSRF_SECOND_RE.matcher(page.body);
+          if (!csrf.find()) {
+            return WebResponse.json(
+                502, Json.obj("error", "Das Verlängerungsformular des Katalogs war nicht lesbar."));
+          }
+        }
+        String form =
+            "csrf="
+                + formEncode(csrf.group(1))
+                + "&renewSelected=1"
+                + "&renewSelectedIDS%5B%5D="
+                + formEncode(renewId)
+                + "&selectAllIDS%5B%5D="
+                + formEncode(renewId);
+        Reply result = request(session, "/MyResearch/CheckedOut", "POST", form);
+        renewed = ALERT_SUCCESS_RE.matcher(result.body).find();
+        Matcher flash = FLASH_TEXT_RE.matcher(result.body);
+        message = renewed ? (flash.find() ? textOf(flash.group(1)) : "Ausleihe verlängert.") : null;
+        if (message != null && message.isEmpty()) message = "Ausleihe verlängert.";
+      } else {
+        String target =
+            safeRenewTarget(request == null ? "" : String.valueOf(valueOr(request, "href", "")));
+        if (target == null) {
+          return WebResponse.json(400, Json.obj("error", "Ungültiger Verlängerungslink."));
+        }
+        Reply result = request(session, target, "GET", null);
+        renewed = RENEWED_RE.matcher(result.body).find();
+        message = renewed ? "Ausleihe verlängert." : null;
+      }
       // The same shape account.js spreads here: { renewed, message, ...loans }.
       Map<String, Object> payload = new LinkedHashMap<>();
       payload.put("renewed", renewed);
-      payload.put("message", renewed ? "Ausleihe verlängert." : null);
+      payload.put("message", message);
       payload.putAll(itemsPayload(loadLoans(session)));
       return WebResponse.json(200, payload);
     } catch (IOException failed) {
@@ -590,11 +658,98 @@ public class Account {
   }
 
   /**
-   * Parse the VuFind "Checked Out" page. The theme renders one table with a title link per row and
-   * date columns; header names differ between VuFind versions, so the column lookup accepts English
-   * and German labels and falls back to the first date found in the row.
+   * VuFind 10 renders the checked-out items as a list of records, not a table:
+   *
+   * <pre>
+   * &lt;ul class="record-list"&gt;
+   *   &lt;li id="record0-123" class="result"&gt;
+   *     &lt;div class="media-body"&gt;
+   *       &lt;h2&gt;&lt;a href="/Record/0-123" class="title"&gt;Lolita : Roman&lt;/a&gt;
+   *           &lt;span class="authors"&gt;von: &lt;a href="/Author/…"&gt;Nabokov, Vladimir&lt;/a&gt;&lt;/span&gt;&lt;/h2&gt;
+   *       &lt;strong&gt;Rückgabedatum: 12.11.2026&lt;/strong&gt;
+   *       &lt;input type="hidden" name="renewAllIDS[]" value="…"&gt;
+   * </pre>
+   *
+   * The due date has no column to be read from, so it is found by its label and falls back to the
+   * first date in the item. Titles without a Solr record come as a {@code <span class="title">}
+   * instead of a link.
+   */
+  static List<Map<String, Object>> parseRecordList(String html) {
+    List<Map<String, Object>> loans = new ArrayList<>();
+    String page = html == null ? "" : html;
+
+    List<int[]> items = new ArrayList<>();
+    Matcher open = RESULT_ITEM_RE.matcher(page);
+    while (open.find()) {
+      if (RESULT_CLASS_RE.matcher(open.group(1)).find()) {
+        items.add(new int[] {open.end(), open.start()});
+      }
+    }
+    if (items.isEmpty()) return loans;
+
+    for (int i = 0; i < items.size(); i += 1) {
+      int from = items.get(i)[0];
+      int to = i + 1 < items.size() ? items.get(i + 1)[1] : page.length();
+      String item = page.substring(from, Math.min(to, page.length()));
+
+      Matcher anchor = ANCHOR_RE.matcher(item);
+      Matcher span = TITLE_SPAN_RE.matcher(item);
+      boolean hasAnchor = anchor.find();
+      String title = hasAnchor ? textOf(anchor.group(2)) : span.find() ? textOf(span.group(1)) : "";
+      if (title.isEmpty()) continue;
+
+      String recordHref = null;
+      String recordId = null;
+      if (hasAnchor) {
+        recordHref = decodeEntities(anchor.group(1));
+        Matcher id = RECORD_ID_RE.matcher(recordHref);
+        if (id.find()) recordId = id.group(1);
+      }
+
+      Matcher authors = AUTHORS_SPAN_RE.matcher(item);
+      String author = "";
+      if (authors.find()) {
+        Matcher authorAnchor = ANY_ANCHOR_RE.matcher(authors.group(1));
+        author = authorAnchor.find() ? textOf(authorAnchor.group(1)) : textOf(authors.group(1));
+      }
+
+      Matcher label = RENEW_ID_LABEL_RE.matcher(item);
+      String due = null;
+      if (label.find()) {
+        int at = label.end();
+        due = firstDate(item.substring(at, Math.min(item.length(), at + 60)));
+      }
+      if (due == null) due = firstDate(item);
+
+      Matcher renewLink = RENEW_RE.matcher(item);
+      Matcher renewForm = RENEW_FORM_ID_RE.matcher(item);
+
+      Map<String, Object> loan = new LinkedHashMap<>();
+      loan.put("title", title);
+      loan.put("author", author);
+      loan.put("due", due);
+      loan.put("dueISO", germanToIso(due == null ? "" : due));
+      loan.put("borrowed", null);
+      loan.put("recordId", recordId);
+      loan.put("recordHref", recordHref);
+      loan.put("renewHref", renewLink.find() ? decodeEntities(renewLink.group(1)) : null);
+      loan.put("renewId", renewForm.find() ? decodeEntities(renewForm.group(1)) : null);
+      loans.add(loan);
+    }
+
+    return loans;
+  }
+
+  /**
+   * Parse the VuFind "Checked Out" page. VuFind 10's record list is tried first; older themes
+   * render one table with a title link per row and date columns, where header names differ between
+   * VuFind versions, so the column lookup accepts English and German labels and falls back to the
+   * first date found in the row.
    */
   public static List<Map<String, Object>> parseLoans(String html) {
+    List<Map<String, Object>> listed = parseRecordList(html);
+    if (!listed.isEmpty()) return listed;
+
     List<Map<String, Object>> loans = new ArrayList<>();
     String page = html == null ? "" : html;
 
@@ -694,6 +849,7 @@ public class Account {
 
       Matcher renew = RENEW_RE.matcher(row);
       String renewHref = renew.find() ? decodeEntities(renew.group(1)) : null;
+      Matcher renewForm = RENEW_FORM_ID_RE.matcher(row);
 
       String author = "";
       for (int i = 1; i < cells.size(); i += 1) {
@@ -716,6 +872,7 @@ public class Account {
       loan.put("recordId", recordId);
       loan.put("recordHref", recordHref);
       loan.put("renewHref", renewHref);
+      loan.put("renewId", renewForm.find() ? decodeEntities(renewForm.group(1)) : null);
       loans.add(loan);
     }
 
@@ -724,9 +881,20 @@ public class Account {
 
   /** {@code 12.3.2024} → {@code 2024-03-12}; null when the cell holds no such date. */
   public static String germanToIso(String value) {
+    Matcher iso = ISO_DATE_RE.matcher(value == null ? "" : value);
+    if (iso.find()) return iso.group(1) + "-" + iso.group(2) + "-" + iso.group(3);
     Matcher match = GERMAN_DATE_RE.matcher(value == null ? "" : value);
     if (!match.find()) return null;
     return match.group(3) + "-" + pad(match.group(2)) + "-" + pad(match.group(1));
+  }
+
+  /** {@code %}-encoding for one form value; the catalogue's own encoding, not a URL. */
+  private static String formEncode(String value) {
+    try {
+      return URLEncoder.encode(value == null ? "" : value, "UTF-8");
+    } catch (UnsupportedEncodingException impossible) {
+      throw new IllegalStateException(impossible);
+    }
   }
 
   private static String pad(String digits) {

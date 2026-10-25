@@ -255,10 +255,21 @@ keeps the resulting cookies in memory, keyed by client id. Every request carries
 the gate cookie the cover proxy also needs, and redirects are followed by hand so a
 `Set-Cookie` on the 302 is not lost. `GET /MyResearch/CheckedOut` is then parsed into JSON.
 
-Column names differ between VuFind versions, so the parser accepts German and English labels
-(`Fällig`, `Rückgabe`, `Due Date`, `Ausgeliehen`, `Borrowed`) and falls back to the first date
-in the row. `account.js` and `Account.java` are held to the same answers by fixtures taken
+That page has two shapes and the parser reads both. VuFind 10 — what
+`katalog.ub.uni-leipzig.de` runs, at 10.1.4 with the `bootstrap5` theme — renders the items as
+`<ul class="record-list">` with one `<li class="result">` per loan, a `<span class="authors">`
+line and the due date as text after its label (`Rückgabedatum`, `Due Date`, `Fällig`, `Frist`).
+Older themes render a table, so the parser falls back to that and accepts German and English
+column labels (`Fällig`, `Rückgabe`, `Due Date`, `Ausgeliehen`, `Borrowed`), then to the first
+date in the row. `account.js` and `Account.java` are held to the same answers by fixtures taken
 from `account.js` itself — see the tests below.
+
+Renewal is not a link in VuFind 10. The list carries each item's renewal id in a hidden field
+(`renewSelectedIDS[]`) and the page's `csrf` hash, and renewing means posting that form back to
+`/MyResearch/CheckedOut`. The API therefore takes the id, not a URL: `POST /api/account/renew`
+with `{"renewId": "…"}` re-reads the page for a fresh `csrf`, posts it, and answers with the
+reloaded loans. Drivers that do provide a link (`renewMyItemsLink`) still work through
+`{"href": "…"}`, which is restricted to `/MyResearch/` on the catalogue's own origin.
 
 What is deliberately *not* kept:
 

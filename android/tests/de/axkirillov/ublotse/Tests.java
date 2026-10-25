@@ -70,6 +70,7 @@ public final class Tests {
 
     section("account API");
     accountApi();
+    accountRecordList();
 
     section("loopback server");
     loopbackServer(publicDirectory, parity);
@@ -410,6 +411,89 @@ public final class Tests {
     // shapes the catalogue serves today; a null page is simply empty rather than a crash.
     eq("a null page has no loans", 0, Account.parseLoans(null).size());
     eq("a page without tables has no loans", 0, Account.parseLoans("<p>Keine Ausleihen.</p>").size());
+  }
+
+  /**
+   * VuFind 10 (what the Leipzig catalogue runs) has no loans table: the items are a record list and
+   * the renewal is a post back to the page carrying the item's id in a hidden field. A parser that
+   * only knows tables reports zero loans for a full account, which is how this was found.
+   */
+  private static void accountRecordList() throws Exception {
+    FakeCatalogue catalogue = new FakeCatalogue();
+    catalogue.recordList = true;
+    Account account = new Account(FakeCatalogue.BASE, catalogue);
+    UblotseApi api =
+        new UblotseApi(new Sru(), new Covers(null), new MemoryWishlist(), account);
+    String client = "account-client-0003";
+
+    WebResponse login =
+        api.handle(
+            "POST",
+            "/api/account/login",
+            empty(),
+            body(Json.obj("username", "1234567890", "password", "geheim")),
+            client);
+    eq("login on the record-list catalogue -> 200", 200, login.status);
+
+    Map<String, Object> session = json(login);
+    check("login reports the account", Boolean.TRUE.equals(session.get("loggedIn")), Json.write(session));
+    List<Object> items = (List<Object>) session.get("items");
+    eq("the record list yields both loans", 2, items.size());
+
+    Map<String, Object> first = (Map<String, Object>) items.get(0);
+    eq("its title comes from the record link", "Lolita : Roman", first.get("title"));
+    eq("its author from the authors span", "Nabokov, Vladimir", first.get("author"));
+    eq("its due date from the labelled line", "02.04.2025", first.get("due"));
+    eq("normalised to an ISO date", "2025-04-02", first.get("dueISO"));
+    eq("its record id is extracted", "0-1610511743", first.get("recordId"));
+    eq("there is no renewal link to follow", null, first.get("renewHref"));
+    eq("but there is a renewal id in the form", "0-1610511743|1|02.04.2025", first.get("renewId"));
+    check("nothing is claimed about a borrowing date", first.containsKey("borrowed") && first.get("borrowed") == null, Json.write(first));
+
+    Map<String, Object> second = (Map<String, Object>) items.get(1);
+    eq("an ILS-only title is read from its span", "Der Zauberberg", second.get("title"));
+    eq("it has no record id", null, second.get("recordId"));
+    eq("it is not renewable", null, second.get("renewId"));
+    eq("it has an author of nothing rather than of the date", "", second.get("author"));
+
+    // Renewing posts the catalogue's own form back to the page it came from. The href is supplied
+    // too, and must be ignored: the renewal id is what identifies the item.
+    WebResponse renewed =
+        api.handle(
+            "POST",
+            "/api/account/renew",
+            empty(),
+            body(
+                Json.obj(
+                    "renewId", first.get("renewId"),
+                    "href", "https://beispiel.example/MyResearch/Record/0-1/Renew")),
+            client);
+    eq("renew -> 200", 200, renewed.status);
+    Map<String, Object> afterRenew = json(renewed);
+    check(
+        "renew reports the catalogue's own message",
+        Boolean.TRUE.equals(afterRenew.get("renewed"))
+            && String.valueOf(afterRenew.get("message")).contains("verl\u00e4ngert"),
+        Json.write(afterRenew));
+    List<Object> refreshed = (List<Object>) afterRenew.get("items");
+    eq("the extended due date is reloaded", "2025-04-20",
+        ((Map<String, Object>) refreshed.get(0)).get("dueISO"));
+
+    FakeCatalogue.Call post = catalogue.calls.get(catalogue.calls.size() - 2);
+    eq("the renewal is a post to the checked-out page", "POST /MyResearch/CheckedOut", post.describe());
+    eq("as a form body", "application/x-www-form-urlencoded", post.contentType);
+    check("with the page's csrf hash", post.form.contains("csrf=csrf-hash-9"), post.form);
+    check("the renew button the catalogue expects", post.form.contains("renewSelected=1"), post.form);
+    check(
+        "and the item's renewal id",
+        post.form.contains("renewSelectedIDS%5B%5D=0-1610511743%7C1%7C02.04.2025"),
+        post.form);
+    check("with the session cookie", post.cookie.contains("LBSESSION=ok"), post.cookie);
+    int hostile = 0;
+    for (FakeCatalogue.Call call : catalogue.calls) {
+      if (call.path.startsWith("/MyResearch/Record/")) hostile += 1;
+    }
+    eq("the supplied href was never requested", 0, hostile);
   }
 
   private static void accountApi() throws Exception {
@@ -1169,6 +1253,9 @@ public final class Tests {
     final List<Call> calls = Collections.synchronizedList(new ArrayList<Call>());
     volatile boolean expired;
     volatile int dueDay = 2;
+    /** Serve VuFind 10's record list instead of the older table, and renew by posting to it. */
+    volatile boolean recordList;
+    volatile String renewForm = "";
 
     @Override
     public Account.Reply send(
@@ -1180,7 +1267,16 @@ public final class Tests {
       if (path.startsWith("/MyResearch/Home")) {
         return "GET".equals(method) ? home(cookie) : login(form);
       }
-      if (path.startsWith("/MyResearch/CheckedOut")) return checkedOut(cookie);
+      if (path.startsWith("/MyResearch/CheckedOut")) {
+        if ("POST".equals(method)) {
+          renewForm = form == null ? "" : form;
+          dueDay = 20;
+          return page(
+              "<div class=\"alert alert-success\">Die Ausleihe wurde verl\u00e4ngert.</div>"
+                  + checkedOutList(cookie));
+        }
+        return recordList ? checkedOutList(cookie) : checkedOut(cookie);
+      }
       if (path.startsWith("/MyResearch/Record/0-11/Renew")) {
         dueDay = 20;
         return page("<div class=\"alert alert-success\">Die Ausleihe wurde verl\u00e4ngert.</div>");
@@ -1240,6 +1336,40 @@ public final class Tests {
               + "<tr><td><a href=\"/Record/0-12\">Buddenbrooks</a></td><td>Mann, Thomas</td>"
               + "<td>11.01.2025</td><td>05.05.2025</td><td>&nbsp;</td></tr>"
               + "</table>");
+    }
+
+    /** VuFind 10's myresearch/checkedout.phtml: a record list plus the csrf the form needs. */
+    private Account.Reply checkedOutList(String cookie) {
+      if (expired || cookie == null || !cookie.contains("LBSESSION=ok")) {
+        return page(loginForm());
+      }
+      String day = dueDay < 10 ? "0" + dueDay : String.valueOf(dueDay);
+      String renewId = "0-1610511743|1|" + day + ".04.2025";
+      return page(
+          "<form name=\"renewals\" method=\"post\" id=\"renewals\">"
+              + "<input type=\"hidden\" value=\"csrf-hash-9\" name=\"csrf\">"
+              + "<input type=\"hidden\" id=\"submitType\" name=\"renewSelected\" value=\"1\">"
+              + "<ul class=\"record-list\">"
+              + "<li id=\"record0-1610511743\" class=\"result\">"
+              + "<div class=\"checkbox\"><label><input class=\"checkbox-select-item\" "
+              + "type=\"checkbox\" name=\"renewSelectedIDS[]\" value=\""
+              + renewId
+              + "\" id=\"checkbox_1\" aria-label=\"Ausleihe ausw\u00e4hlen\"></label>"
+              + "<input type=\"hidden\" name=\"selectAllIDS[]\" value=\""
+              + renewId
+              + "\"></div>"
+              + "<div class=\"media\"><div class=\"media-body\">"
+              + "<h2><a href=\"/Record/0-1610511743\" class=\"title\">Lolita : Roman</a>"
+              + "<span class=\"authors\">von: "
+              + "<a href=\"/Author/Home?author=Nabokov\">Nabokov, Vladimir</a><br></span></h2>"
+              + "<strong>R\u00fcckgabedatum: "
+              + day
+              + ".04.2025</strong>"
+              + "</div></div></li>"
+              + "<li id=\"record0-99\" class=\"result\"><div class=\"media-body\">"
+              + "<h2><span class=\"title\">Der Zauberberg</span></h2>"
+              + "<strong>R\u00fcckgabedatum: 2.5.2025</strong></div></li>"
+              + "</ul></form>");
     }
 
     private static String loggedInPage() {

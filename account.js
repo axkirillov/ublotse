@@ -37,6 +37,8 @@ function textOf(html) {
 }
 
 function germanToIso(value) {
+  const iso = /\b(\d{4})-(\d{2})-(\d{2})\b/.exec(String(value));
+  if (iso) return iso[1] + '-' + iso[2] + '-' + iso[3];
   const match = /(\d{1,2})\.(\d{1,2})\.(\d{4})/.exec(String(value));
   if (!match) return null;
   const [, day, month, year] = match;
@@ -44,9 +46,20 @@ function germanToIso(value) {
 }
 
 function firstDate(text) {
-  const match = /\b\d{1,2}\.\d{1,2}\.\d{4}\b/.exec(String(text));
+  const match = /\b\d{1,2}\.\d{1,2}\.\d{4}\b|\b\d{4}-\d{2}-\d{2}\b/.exec(String(text));
   return match ? match[0] : null;
 }
+
+/**
+ * The renew column, in the two shapes VuFind has used: a link the browser can follow
+ * (`renewMyItemsLink` drivers) or a hidden form value the checked-out page posts back
+ * (`getRenewDetails` drivers, which is what this catalogue does).
+ */
+const RENEW_LINK_RE = /<a\b[^>]*href="([^"]*(?:renew|verlaengern|verl(?:ä|&auml;)ngern)[^"]*)"[^>]*>/i;
+const RENEW_FORM_ID_RE =
+  /<input\b(?=[^>]*name="(?:renewAllIDS|renewSelectedIDS|selectAllIDS)\[\]")(?=[^>]*value="([^"]*)")[^>]*>/i;
+const RENEW_ID_LABEL_RE =
+  /(?:R(?:ü|&uuml;|ue)ckgabedatum|Due Date|F(?:ä|&auml;|ae)llig(?: am)?|Leihfrist|Frist)\s*:?\s*(?:<[^>]*>\s*)*/i;
 
 /** Split a row into cells, keeping the raw HTML of each. */
 function cellsOf(rowHtml) {
@@ -65,12 +78,80 @@ function headerIndex(headers, pattern) {
 }
 
 /**
- * Parse the VuFind "Checked Out" page. The theme renders one table with a
+ * VuFind 10 renders the checked-out items as a list of records, not a table:
+ *
+ *   <ul class="record-list">
+ *     <li id="record0-123" class="result">
+ *       <div class="media-body">
+ *         <h2><a href="/Record/0-123" class="title">Lolita : Roman</a>
+ *             <span class="authors">von: <a href="/Author/…">Nabokov, Vladimir</a></span></h2>
+ *         <strong>Rückgabedatum: 12.11.2026</strong>
+ *         <input type="hidden" name="renewAllIDS[]" value="…">
+ *
+ * The due date has no column to be read from, so it is found by its label and
+ * falls back to the first date in the item. Titles without a Solr record come
+ * as a <span class="title"> instead of a link.
+ */
+function parseRecordList(html) {
+  const source = String(html);
+  const starts = [];
+  const openRe = /<li\b([^>]*)>/gi;
+  let open;
+  while ((open = openRe.exec(source))) {
+    if (!/class="[^"]*\bresult\b[^"]*"/i.test(open[1])) continue;
+    starts.push({ from: openRe.lastIndex, at: open.index });
+  }
+  if (!starts.length) return [];
+
+  const loans = [];
+  for (let i = 0; i < starts.length; i += 1) {
+    const end = i + 1 < starts.length ? starts[i + 1].at : source.length;
+    const item = source.slice(starts[i].from, end);
+
+    const anchor = /<a\b[^>]*href="([^"]*\/Record\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/i.exec(item);
+    const span = /<span\b[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>([\s\S]*?)<\/span>/i.exec(item);
+    const title = anchor ? textOf(anchor[2]) : span ? textOf(span[1]) : '';
+    if (!title) continue;
+
+    const recordHref = anchor ? decodeEntities(anchor[1]) : null;
+    const recordId = recordHref ? (/(?:\/Record\/)([^?"'/]+)/.exec(recordHref) || [])[1] || null : null;
+
+    const authors = /<span\b[^>]*class="[^"]*\bauthors\b[^"]*"[^>]*>([\s\S]*?)<\/span>/i.exec(item);
+    const authorAnchor = authors ? /<a\b[^>]*>([\s\S]*?)<\/a>/i.exec(authors[1]) : null;
+    const author = authorAnchor ? textOf(authorAnchor[1]) : authors ? textOf(authors[1]).replace(/^\S+:\s*/, '') : '';
+
+    const label = RENEW_ID_LABEL_RE.exec(item);
+    const due = (label ? firstDate(item.slice(label.index + label[0].length, label.index + label[0].length + 60)) : null) || firstDate(item);
+
+    const renewLink = RENEW_LINK_RE.exec(item);
+    const renewForm = RENEW_FORM_ID_RE.exec(item);
+
+    loans.push({
+      title,
+      author,
+      due,
+      dueISO: germanToIso(due || ''),
+      borrowed: null,
+      recordId,
+      recordHref,
+      renewHref: renewLink ? decodeEntities(renewLink[1]) : null,
+      renewId: renewForm ? decodeEntities(renewForm[1]) : null,
+    });
+  }
+
+  return loans;
+}
+
+/**
+ * Parse the VuFind "Checked Out" page. Older themes render one table with a
  * title link per row and date columns; header names differ between VuFind
  * versions, so the column lookup accepts English and German labels and falls
  * back to the first date found in the row.
  */
 function parseLoans(html) {
+  const listed = parseRecordList(html);
+  if (listed.length) return listed;
+
   const tables = String(html).match(/<table\b[\s\S]*?<\/table>/gi) || [];
   const table =
     tables.find((candidate) => /f(?:ä|&auml;|ae)llig|due date|ausgeliehen|checked out|r(?:ü|&uuml;|ue)ckgabe/i.test(candidate)) ||
@@ -108,8 +189,9 @@ function parseLoans(html) {
     if (!due) due = dates[0] || null;
     if (!borrowed) borrowed = dates.find((value) => value !== due) || null;
 
-    const renewMatch = /<a\b[^>]*href="([^"]*(?:renew|Renew|verlaengern|verl(?:ä|&auml;)ngern)[^"]*)"[^>]*>/i.exec(row);
+    const renewMatch = RENEW_LINK_RE.exec(row);
     const renewHref = renewMatch ? decodeEntities(renewMatch[1]) : null;
+    const renewForm = RENEW_FORM_ID_RE.exec(row);
 
     const author = cells
       .slice(1)
@@ -125,6 +207,7 @@ function parseLoans(html) {
       recordId,
       recordHref,
       renewHref,
+      renewId: renewForm ? decodeEntities(renewForm[1]) : null,
     });
   }
 
@@ -177,7 +260,10 @@ export function createAccount({ catalogueBase, sendJson, readJsonBody, clientIdO
   async function request(session, pathOrUrl, options = {}) {
     let target = pathOrUrl.startsWith('http') ? pathOrUrl : catalogueBase.replace(/\/$/, '') + pathOrUrl;
     let method = options.method || 'GET';
-    let body = options.form ? new URLSearchParams(options.form).toString() : undefined;
+    let body = undefined;
+    if (options.form) {
+      body = typeof options.form === 'string' ? options.form : new URLSearchParams(options.form).toString();
+    }
 
     for (let hop = 0; hop < MAX_HOPS; hop += 1) {
       const response = await fetch(target, {
@@ -324,15 +410,41 @@ export function createAccount({ catalogueBase, sendJson, readJsonBody, clientIdO
         return;
       }
       const body = await readJsonBody(req);
-      const target = safeRenewTarget(String(body?.href || ''));
-      if (!target) {
-        sendJson(res, 400, { error: 'Ungültiger Verlängerungslink.' });
-        return;
+      const renewId = String(body?.renewId || '').slice(0, 400);
+      let renewed = false;
+      let message = null;
+
+      if (renewId) {
+        // The common case: the checked-out page carries the item's renewal id and the
+        // csrf hash its own form needs, so the renewal is a post back to that page.
+        const page = await request(session, '/MyResearch/CheckedOut');
+        const csrf = /name="csrf"\s+value="([^"]+)"/i.exec(page.html) || /value="([^"]+)"\s+name="csrf"/i.exec(page.html);
+        if (!csrf) {
+          sendJson(res, 502, { error: 'Das Verlängerungsformular des Katalogs war nicht lesbar.' });
+          return;
+        }
+        const form = new URLSearchParams();
+        form.set('csrf', csrf[1]);
+        form.set('renewSelected', '1');
+        form.append('renewSelectedIDS[]', renewId);
+        form.append('selectAllIDS[]', renewId);
+        const result = await request(session, '/MyResearch/CheckedOut', { method: 'POST', form: form.toString() });
+        renewed = /class="[^"]*alert-success/i.test(result.html);
+        const flash = /<div class="[^"]*alert[^"]*"[^>]*>([\s\S]{0,400}?)<\/div>/i.exec(result.html);
+        message = renewed ? (flash ? textOf(flash[1]) : 'Ausleihe verlängert.') : null;
+      } else {
+        const target = safeRenewTarget(String(body?.href || ''));
+        if (!target) {
+          sendJson(res, 400, { error: 'Ungültiger Verlängerungslink.' });
+          return;
+        }
+        const result = await request(session, target);
+        renewed = /verl(?:ä|&auml;)ngert|renewed|success/i.test(result.html);
+        message = renewed ? 'Ausleihe verlängert.' : null;
       }
-      const result = await request(session, target);
-      const renewed = /verl(?:ä|&auml;)ngert|renewed|success/i.test(result.html);
+
       const loans = await loadLoans(session);
-      sendJson(res, 200, { renewed, message: renewed ? 'Ausleihe verlängert.' : null, ...loans });
+      sendJson(res, 200, { renewed, message, ...loans });
       return;
     }
 
